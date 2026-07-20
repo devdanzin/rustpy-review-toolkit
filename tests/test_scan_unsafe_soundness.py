@@ -119,6 +119,32 @@ fn bits(x: f64) -> u64 {
             [f for f in r["findings"] if f["type"] == "unguarded_handle_transmute"], []
         )
 
+    def test_prose_safety_comment_recorded_not_reclassified(self) -> None:
+        # A prose `// SAFETY:` comment is surfaced as a sub-signal but does NOT
+        # discharge the finding (the scanner can't verify prose).
+        rust = """
+fn as_untyped(x: PyRef<PyTuple>) -> PyRef<PyObjectRef> {
+    // SAFETY: PyRef<T> has the same layout as PyObjectRef
+    unsafe { transmute(x) }
+}
+"""
+        r = _run(rust)
+        f = [f for f in r["findings"] if f["type"] == "unguarded_handle_transmute"]
+        self.assertEqual(len(f), 1)
+        self.assertTrue(f[0]["details"]["prose_safety_comment"])
+        self.assertEqual(f[0]["classification"], "CONSIDER")
+
+    def test_no_prose_safety_comment(self) -> None:
+        rust = """
+fn convert(x: PyObjectRef) -> PyRef<PyInt> {
+    unsafe { transmute(x) }
+}
+"""
+        r = _run(rust)
+        f = [f for f in r["findings"] if f["type"] == "unguarded_handle_transmute"]
+        self.assertEqual(len(f), 1)
+        self.assertFalse(f[0]["details"]["prose_safety_comment"])
+
 
 if __name__ == "__main__":
     unittest.main()

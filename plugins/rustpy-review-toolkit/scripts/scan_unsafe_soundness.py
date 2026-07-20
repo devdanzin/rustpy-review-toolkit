@@ -71,6 +71,11 @@ _TRANSMUTE_GUARD_TOKENS = (
     "repr(transparent)",
 )
 
+# A prose `// SAFETY:` comment — asserts an invariant without proving it. Not a
+# guard token (does not discharge the finding), but recorded as a sub-signal to
+# focus the agent's trace on the claimed invariant.
+_PROSE_SAFETY_RE = re.compile(r"//[^\n]*SAFETY", re.IGNORECASE)
+
 
 def _line_of(source: bytes, offset: int) -> int:
     """1-indexed line number of a byte offset."""
@@ -174,6 +179,12 @@ def _check_unguarded_transmute(
             continue
         if any(tok in fn_text for tok in _TRANSMUTE_GUARD_TOKENS):
             continue  # a check/transparent guard is present in the fn — sound
+        # A prose `// SAFETY:` comment asserts (but does not prove) the layout
+        # invariant. It does NOT discharge the finding — the scanner can't verify
+        # prose — but surfacing it points the agent's transparency trace straight
+        # at the claimed invariant. Additive signal only. (From the tuple.rs
+        # meta-eval: all 3 sound transmutes carried such a comment.)
+        prose_safety = _PROSE_SAFETY_RE.search(fn_text) is not None
         for m in _TRANSMUTE_RE.finditer(body_bytes):
             line = _line_of(source, body.start_byte + m.start())
             findings.append(
@@ -184,14 +195,25 @@ def _check_unguarded_transmute(
                     description=(
                         f"`transmute` involving a Python handle type in "
                         f"`{fn['name']}` with no visible `TransmuteFromObject::check` "
-                        f"or `repr(transparent)` SAFETY in the function. Verify the "
-                        f"source and target are `#[repr(transparent)]`-compatible."
+                        f"or `repr(transparent)` SAFETY in the function"
+                        + (
+                            " (a prose `// SAFETY:` comment IS present — verify the "
+                            "claimed layout invariant)"
+                            if prose_safety
+                            else ""
+                        )
+                        + ". Verify the source and target are "
+                        "`#[repr(transparent)]`-compatible."
                     ),
                     file=rel,
                     line=line,
                     function=fn["name"],
                     category="unsafe-soundness",
-                    details={"fn": fn["name"], "guard_seen": False},
+                    details={
+                        "fn": fn["name"],
+                        "guard_seen": False,
+                        "prose_safety_comment": prose_safety,
+                    },
                 )
             )
 
