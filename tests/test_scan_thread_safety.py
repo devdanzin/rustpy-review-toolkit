@@ -90,6 +90,48 @@ struct InternalHelper {
         r = _run({"crates/vm/src/foo.rs": src})
         self.assertEqual(r["findings"], [])
 
+    def test_cell_is_medium_confidence(self) -> None:
+        # v0.2.1: a Cell race is a torn/lost update, not a BorrowMutError → MEDIUM,
+        # not HIGH (only RefCell is the deterministic-panic HIGH).
+        src = """
+struct ContextInner {
+    idx: Cell<usize>,
+}
+unsafe impl Sync for ContextInner {}
+
+#[pyclass(module = "contextvars", name = "Context")]
+struct PyContext {
+    inner: ContextInner,
+}
+"""
+        r = _run({"crates/stdlib/src/contextvars.rs": src})
+        f = [x for x in r["findings"] if x["details"]["struct"] == "ContextInner"]
+        self.assertEqual(len(f), 1)
+        self.assertEqual(f[0]["confidence"], "MEDIUM")
+
+    def test_cfg_select_macro_body_unsafe_sync_flagged(self) -> None:
+        # v0.2.1: an `unsafe impl Sync` inside a cfg_select! macro body is opaque to
+        # tree-sitter; the text-regex pass catches it (the PyWeak.callback shape).
+        src = """
+#[pyclass(module = "_weakref", name = "ref")]
+#[derive(Debug)]
+struct PyWeak {
+    callback: UnsafeCell<Option<PyObjectRef>>,
+}
+
+cfg_select! {
+    feature = "threading" => {
+        unsafe impl Send for PyWeak {}
+        unsafe impl Sync for PyWeak {}
+    }
+    _ => {}
+}
+"""
+        r = _run({"crates/vm/src/object/core.rs": src})
+        f = [x for x in r["findings"] if x["details"]["struct"] == "PyWeak"]
+        self.assertEqual(len(f), 1)
+        self.assertIn("UnsafeCell", f[0]["details"]["interior_mutability"])
+
     def test_tuple_struct_newtype_flagged(self) -> None:
         # FrameUnsafeCell(UnsafeCell<T>) — a tuple-struct newtype embedded in a
         # #[pyclass] Frame, force-Sync. No named fields → the tuple fallback.

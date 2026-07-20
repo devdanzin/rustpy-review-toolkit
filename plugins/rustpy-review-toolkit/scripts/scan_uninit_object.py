@@ -22,6 +22,7 @@ Cross-linked from the unsafe-soundness agent's `assume_init` note.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -60,6 +61,11 @@ _UNCHECKED_TOKENS = (
     "payload_unchecked",
     "payload::<",
 )
+# A hand-written `#[pyslot] fn slot_new`/`tp_new`/`py_new` defines `__new__` for
+# the type — so `T.__new__(T)` goes through it (properly initialized), not a
+# default payload. Discharges the constructor obligation (v0.2.1: removes the
+# PyRange false positive, which uses a raw `slot_new` instead of `impl Constructor`).
+_CTOR_METHOD_RE = re.compile(r"\bfn\s+(?:slot_new|tp_new|py_new)\b")
 
 
 def analyze(target: str, *, max_files: int = 0) -> dict:
@@ -95,6 +101,12 @@ def analyze(target: str, *, max_files: int = 0) -> dict:
                     mk in (attr.get("args_text") or "") for mk in _CTOR_ATTR_MARKERS
                 ):
                     ctor_types.add(typ)
+            # A hand-written `#[pyslot] fn slot_new`/`tp_new`/`py_new` in the impl
+            # body defines `__new__` (the PyRange shape) — often a trait-less
+            # methods impl, so check before the trait filter.
+            body = ib["body_node"]
+            if body is not None and _CTOR_METHOD_RE.search(text_of(body, source)):
+                ctor_types.add(typ)
             if not trait:
                 continue
             if trait in _PAYLOAD_SLOT_TRAITS:

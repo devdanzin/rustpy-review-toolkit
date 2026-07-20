@@ -4,6 +4,20 @@ All notable changes to rustpy-review-toolkit are documented here. The format is 
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-07-20
+
+Scanner calibrations from the first **whole-tree run of all 13 agents** (the v0.2 class-expansion agents' debut), which reproduced live 3 SIGSEGVs, 6 SIGABRTs, and 2 panic classes, and drove three precision fixes. Test count 112 → 117; `ruff` + `mypy` clean; each validated on the real tree.
+
+### Changed
+
+- **recursion-guard** (`scan_recursion_guard.py` + `data/recursion_guard_tokens.json`): two fixes from the recursion agent's triage. (a) **Dispatch-guard awareness** — `.repr(vm)` and `.rich_compare(` are guarded one level up (`PyObject::repr` / `PyObject::_cmp` wrap `with_recursion`), so a slot recursing via them cannot overflow; they are no longer recursion tokens. This drops the 8 dispatch-guarded repr/cmp false positives, leaving only the genuinely-unguarded `.hash(vm)`/`.str(vm)`/`__reduce__` slots (`PyObject::hash` calls the slot directly). (b) **Parameter-walk coverage** — a new `unguarded_parameter_walk_recursion` check catches self-recursive `make_parameters`/`subs_parameters` helpers (an internal-tier getset path the protocol-slot loop missed): the flagship **RUSTPY-0007a** class. `list[L].__parameters__` on a self-referential `L` SIGSEGVs RustPython — the CPython twin is **open issue #154275** (fix PR #154277). Net on the whole tree: 13 findings → 9 (4 hash + 1 str + 4 parameter-walk), the flagship class now covered.
+- **uninitialized-object** (`scan_uninit_object.py`): a hand-written `#[pyslot] fn slot_new`/`tp_new`/`py_new` in a type's impl now discharges the constructor obligation (it defines `__new__`, so `T.__new__(T)` is properly initialized). Removes the sole false positive, **PyRange** (which uses a raw `slot_new` instead of `impl Constructor`); the `_sre Match` (RUSTPY-0008) finding is retained. 18 → 15 findings.
+- **thread-safety** (`scan_thread_safety.py`): (a) a text-regex pass now finds `unsafe impl Sync`/`Send` hidden in a `cfg_select!`/`cfg_if!` **macro body** (opaque to tree-sitter), catching `PyWeak.callback: UnsafeCell` (`object/core.rs`) the AST pass missed. (b) The per-finding race text is now token-accurate: **RefCell** → a deterministic `BorrowMutError` panic (HIGH), **Cell** → a torn/lost update (MEDIUM), **UnsafeCell/Rc** → UB (MEDIUM) — previously every `Cell` was over-labelled a "guaranteed BorrowMutError". 5 → 6 findings.
+
+### Notes
+
+- The v0.2 whole-tree run recorded two new findings in the [findings repo](https://github.com/devdanzin/rustpython-review-findings): **RPYR-0011** (`math.sumprod` big-int generic path eager-collects both iterables → OOM-abort where CPython streams) and **RPYR-0012** (`itertools.cycle` + the itertools cluster leak reference cycles — no GC traverse). It also produced a **shared-CPython-crash ledger** (`catalog/shared_cpython_crashes.md`): a "both interpreters crash" case is not automatically ACCEPTABLE — a pure-Python-reachable segfault is a bug in both (e.g. genericalias `make_parameters` = CPython #154275), distinct from a documented C-API/`ctypes` contract crash.
+
 ## [0.2.0] — 2026-07-20
 
 **Class-expansion release: 6 → 13 agents.** Adds the seven deferred defect-class agents from design §7, each grounded against the fuzzing catalog's A–J taxonomy and the current RustPython source (`3290f287f`). Architecture: static-first — the four agents that need a CPython/concurrency differential encode the fuzzer's verified SAFE lists as scanner data and leave the differential to the agent triage step (the workflow already used to confirm RPYR-0009/0010); no automated oracle was built. Every scanner was validated end-to-end on the real tree (surfaces its fuzzer anchors, quiet on the SAFE/migrated set) and unit-tested (test count 76 → 112, all `ruff` + `mypy` clean).

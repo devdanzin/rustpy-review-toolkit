@@ -93,6 +93,40 @@ impl AsSequence for PyCtor {
         r = _run({"crates/vm/src/builtins/ctor.rs": src})
         self.assertEqual(r["findings"], [])
 
+    def test_slot_new_method_discharges_constructor(self) -> None:
+        # v0.2.1: a raw `#[pyslot] fn slot_new` defines __new__ (the PyRange shape)
+        # even without `impl Constructor` → not flagged.
+        src = """
+#[pyclass(module = "builtins", name = "range")]
+#[derive(Debug)]
+struct PyRange {
+    start: PyRef<PyInt>,
+    stop: PyRef<PyInt>,
+    step: PyRef<PyInt>,
+}
+
+#[pyclass(with(AsMapping))]
+impl PyRange {
+    #[pyslot]
+    fn slot_new(cls: PyTypeRef, args: FuncArgs, vm: &VirtualMachine) -> PyResult {
+        Ok(vm.ctx.none())
+    }
+}
+
+impl AsMapping for PyRange {
+    fn as_mapping() -> &'static PyMappingMethods {
+        static M: PyMappingMethods = PyMappingMethods {
+            subscript: atomic_func!(|m, needle, vm| PyRange::mapping_downcast(m).getitem(needle, vm)),
+        };
+        &M
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/range.rs": src})
+        self.assertFalse(
+            [x for x in r["findings"] if x["details"]["payload"] == "PyRange"]
+        )
+
     def test_no_protocol_slot_not_flagged(self) -> None:
         # A payload with only #[pymethod]s (no payload-touching slot) is not this
         # agent's concern (methods downcast-fail cleanly).

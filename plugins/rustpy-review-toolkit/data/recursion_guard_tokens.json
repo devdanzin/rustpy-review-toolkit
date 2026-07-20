@@ -1,5 +1,5 @@
 {
-  "_comment": "Class D (recursion-guard). A protocol slot that recurses into a contained Python object (calling repr/str/hash/compare on it, threading `vm`) without entering a recursion guard overflows the NATIVE stack on a deep/cyclic object → SIGSEGV (not a catchable RecursionError). RustPython guards repr with `ReprGuard` and the frame depth with `with_recursion`; str/eq/hash on the same containers are the gap. Known-open upstream umbrella #2796.",
+  "_comment": "Class D (recursion-guard). A protocol slot / helper that recurses into a contained Python object without a recursion guard overflows the NATIVE stack on a deep/cyclic object → SIGSEGV (not a catchable RecursionError). RustPython guards frame depth with `with_recursion` and per-object repr with `ReprGuard`. CALIBRATION (v0.2.1): `.repr(vm)` and `.rich_compare(` are DISPATCH-guarded one level up — `PyObject::repr` and `PyObject::_cmp` (protocol/object.rs) both wrap `with_recursion`, so a slot recursing via them cannot overflow. Only `.hash(vm)` (PyObject::hash calls the slot directly, unguarded), `.str(vm)`, `__reduce__`, and the getset/helper parameter walk (`make_parameters`/`subs_parameters`, the RUSTPY-0007a / CPython #154275 class) are the real gap.",
   "guard_tokens": [
     "ReprGuard",
     "with_recursion",
@@ -8,12 +8,19 @@
     "check_c_stack_overflow"
   ],
   "recursion_tokens": [
-    ".repr(vm",
     ".str(vm",
     ".hash(vm",
     "._hash(vm",
-    ".rich_compare(",
     ".reduce(vm",
-    "make_parameters"
+    "make_parameters",
+    "subs_parameters"
+  ],
+  "_dispatch_guarded_tokens_do_not_flag": [
+    ".repr(vm",
+    ".rich_compare("
+  ],
+  "parameter_walk_helpers": [
+    "make_parameters",
+    "subs_parameters"
   ]
 }

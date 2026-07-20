@@ -20,13 +20,14 @@ the triggers are specific object graphs). Framed like gc-traverse.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_rustpy import build_rustpy_report, discover  # noqa: E402
 from map_rustpy_internals import classify_functions, load_protocol_traits  # noqa: E402
-from rust_ts_utils import parse_bytes, strip_comments  # noqa: E402
+from rust_ts_utils import extract_fn_items, parse_bytes, strip_comments  # noqa: E402
 from scan_common import (  # noqa: E402
     deduplicate_findings,
     discover_rust_files,
@@ -43,15 +44,24 @@ _DEFAULT_GUARDS = (
     "check_recursive_call",
     "check_c_stack_overflow",
 )
+# `.repr(vm)` / `.rich_compare(` are DISPATCH-guarded (PyObject::repr / ::_cmp wrap
+# with_recursion) — a slot recursing via them cannot overflow, so they are NOT
+# recursion tokens (v0.2.1 calibration). Only PyObject::hash calls the slot
+# directly (unguarded), plus str/reduce and the parameter walk.
 _DEFAULT_RECURSION = (
-    ".repr(vm",
     ".str(vm",
     ".hash(vm",
     "._hash(vm",
-    ".rich_compare(",
     ".reduce(vm",
     "make_parameters",
+    "subs_parameters",
 )
+# Free-function helpers that walk a Python object graph recursively (the getset
+# `__parameters__` path). RustPython's `make_parameters_from_slice` self-recurses
+# unguarded → SIGSEGV on a self-referential generic-alias arg (RUSTPY-0007a; the
+# CPython twin is #154275). These are internal-tier, so the protocol-slot path
+# below misses them — detected separately by name + self-recursion.
+_PARAM_WALK_RE = re.compile(r"\b\w*(?:make_parameters|subs_parameters)\w*\b")
 # The protocol slots where unguarded recursion overflows the native stack.
 _RECURSION_SLOTS = {
     "__repr__",
@@ -171,6 +181,54 @@ def analyze(target: str, *, max_files: int = 0) -> dict:
                         "class": fn["class"],
                         "recursion_calls": recurses,
                         "check": "unguarded_protocol_recursion",
+                    },
+                )
+            )
+
+        # Parameter-walk helpers (the `__parameters__` getset path). These are
+        # internal free fns the protocol-slot loop misses. A `make_parameters`/
+        # `subs_parameters` helper that recurses into itself over a collection
+        # with no guard overflows the native stack on a self-referential
+        # generic-alias arg — RUSTPY-0007a; CPython twin #154275.
+        for item in extract_fn_items(tree, source):
+            if not _PARAM_WALK_RE.search(item["name"]):
+                continue
+            body = item["body_node"]
+            if body is None:
+                continue
+            b_start = body.start_point[0] + 1
+            b_end = body.end_point[0] + 1
+            body_text = "\n".join(stripped[b_start - 1 : b_end])
+            if not _PARAM_WALK_RE.search(body_text):
+                continue  # no recursive call to a parameter-walk helper
+            if not any(it in body_text for it in _ITER_TOKENS):
+                continue  # not iterating a collection
+            if any(g in body_text for g in guard_tokens):
+                continue  # guarded
+            slots_analyzed += 1
+            findings.append(
+                make_finding(
+                    "unguarded_parameter_walk_recursion",
+                    classification="CONSIDER",
+                    confidence="HIGH",
+                    description=(
+                        f"`{item['name']}` recurses over a Python object graph "
+                        f"(the `__parameters__`/generic-alias parameter walk) with no "
+                        f"recursion guard. A self-referential generic-alias arg "
+                        f"(`L=[]; L.append(L); list[L].__parameters__`) overflows the "
+                        f"native stack → SIGSEGV (RUSTPY-0007a; the CPython twin is "
+                        f"open issue #154275, fix PR #154277 adds a recursion guard). "
+                        f"Wrap in `vm.with_recursion(...)`."
+                    ),
+                    file=rel,
+                    line=item["start_line"],
+                    function=item["name"],
+                    category="recursion-guard",
+                    details={
+                        "helper": item["name"],
+                        "class": "parameter_walk",
+                        "cpython_issue": "154275",
+                        "check": "unguarded_parameter_walk_recursion",
                     },
                 )
             )

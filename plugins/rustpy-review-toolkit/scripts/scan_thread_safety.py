@@ -39,6 +39,7 @@ from rust_ts_utils import (  # noqa: E402
     extract_impl_blocks,
     extract_struct_defs,
     parse_bytes,
+    strip_comments,
     text_of,
 )
 from scan_common import (  # noqa: E402
@@ -51,10 +52,14 @@ from scan_common import (  # noqa: E402
 )
 
 _DEFAULT_UNSAFE_IM = ("Cell", "RefCell", "UnsafeCell", "Rc")
-# RefCell/Cell race → a guaranteed BorrowMutError panic under contention (the
-# strongest F shape, 0001/0019); UnsafeCell/Rc → UB / non-atomic RMW (may be
-# hand-synchronized), ranked a notch lower.
-_HIGH_RISK = ("Cell", "RefCell")
+# A hand-written `unsafe impl Sync/Send for X`, matched at the TEXT level so it is
+# found even inside a `cfg_select!`/`cfg_if!` macro body — which tree-sitter parses
+# as an opaque token tree, so `extract_impl_blocks` misses it (v0.2.1: caught the
+# `PyWeak.callback` UnsafeCell impl hidden in a `cfg_select!`). `\b` avoids matching
+# a trait whose name merely ends in `Sync` (e.g. `MaybeSync`).
+_UNSAFE_SYNC_RE = re.compile(
+    r"unsafe\s+impl(?:\s*<[^>]*>)?\s+\b(?:Send|Sync)\b\s+for\s+(\w+)"
+)
 
 
 def _load_im_tokens() -> list[str]:
@@ -127,13 +132,20 @@ def analyze(target: str, *, max_files: int = 0) -> dict:
         }
         reachable = _reachable_from_pyclass(struct_fields, pyclass_names)
 
-        # Types force-marked Sync/Send by a hand-written `unsafe impl`.
+        # Types force-marked Sync/Send by a hand-written `unsafe impl`. The AST
+        # pass gives accurate lines for top-level impls; a text-regex pass over the
+        # comment-stripped source additionally catches impls hidden in a
+        # `cfg_select!`/`cfg_if!` macro body (opaque to tree-sitter).
         forced_sync: dict[str, int] = {}
         for ib in extract_impl_blocks(tree, source):
             if not ib["is_unsafe"] or not ib["trait"]:
                 continue
             if _bare_ident(ib["trait"]) in ("Sync", "Send"):
                 forced_sync.setdefault(_bare_ident(ib["type"]), ib["start_line"])
+        stripped_src = strip_comments(source).decode("utf-8", "replace")
+        for m in _UNSAFE_SYNC_RE.finditer(stripped_src):
+            line = stripped_src[: m.start()].count("\n") + 1
+            forced_sync.setdefault(m.group(1), line)
 
         struct_line = {sd["name"]: sd["start_line"] for sd in structs}
         for sd in structs:
@@ -154,7 +166,21 @@ def analyze(target: str, *, max_files: int = 0) -> dict:
             all_toks = sorted(
                 {t for (_, _, toks) in im_hits for t in toks} | set(struct_toks)
             )
-            high = any(t in _HIGH_RISK for t in all_toks)
+            # Per-token race mechanism (the earlier text over-claimed "BorrowMutError"
+            # for every Cell). Only RefCell → a deterministic panic (HIGH); Cell → a
+            # torn/lost update; UnsafeCell/Rc → UB.
+            if "RefCell" in all_toks:
+                confidence = "HIGH"
+                race_note = (
+                    "a RefCell race is a deterministic BorrowMutError panic under "
+                    "contention (→ process abort)"
+                )
+            elif "Cell" in all_toks:
+                confidence = "MEDIUM"
+                race_note = "a Cell race is a torn / lost update (no panic)"
+            else:
+                confidence = "MEDIUM"
+                race_note = "an UnsafeCell/Rc race is UB / a non-atomic RMW"
             is_pyclass = name in pyclass_names
             fields_desc = (
                 ", ".join(f"`{fn}: {ft}`" for (fn, ft, _) in im_hits)
@@ -166,17 +192,11 @@ def analyze(target: str, *, max_files: int = 0) -> dict:
                 if is_pyclass
                 else "(embedded in a #[pyclass] payload)"
             )
-            race_note = (
-                "a RefCell/Cell race is a guaranteed BorrowMutError panic under "
-                "contention"
-                if high
-                else "a torn read / UB"
-            )
             findings.append(
                 make_finding(
                     "thread_unsafe_interior_mutability",
                     classification="CONSIDER",
-                    confidence="HIGH" if high else "MEDIUM",
+                    confidence=confidence,
                     description=(
                         f"`{name}` {where} holds non-Sync interior mutability "
                         f"{fields_desc} and is force-marked `unsafe impl Sync/Send "

@@ -72,7 +72,9 @@ impl Hashable for PyBoundMethod {
             [x for x in r["findings"] if x["details"]["class"] == "PyBoundMethod"]
         )
 
-    def test_unguarded_compare_recursion_flagged(self) -> None:
+    def test_dispatch_guarded_compare_not_flagged(self) -> None:
+        # v0.2.1: `.rich_compare(` recursion is DISPATCH-guarded (PyObject::_cmp
+        # wraps with_recursion) → a cmp slot recursing via it is NOT flagged.
         src = """
 impl Comparable for PyUnion {
     fn cmp(zelf: &Py<Self>, other: &PyObject, op: PyComparisonOp, vm: &VirtualMachine) -> PyResult<PyComparisonValue> {
@@ -86,8 +88,60 @@ impl Comparable for PyUnion {
 }
 """
         r = _run({"crates/vm/src/builtins/union.rs": src})
-        self.assertTrue(
-            [x for x in r["findings"] if x["details"]["class"] == "PyUnion"]
+        self.assertFalse(
+            [
+                x
+                for x in r["findings"]
+                if x["details"].get("class") == "PyUnion"
+                and x["type"] == "unguarded_protocol_recursion"
+            ]
+        )
+
+    def test_parameter_walk_recursion_flagged(self) -> None:
+        # v0.2.1: the RUSTPY-0007a / CPython #154275 class — a make_parameters
+        # helper that self-recurses over a collection with no guard.
+        src = """
+fn make_parameters_from_slice(args: &[PyObjectRef], vm: &VirtualMachine) -> PyTupleRef {
+    let mut parameters = Vec::new();
+    for arg in args.iter() {
+        if let Some(subparams) = arg.get_attr(...) {
+            let sub = make_parameters_from_slice(&items, vm);
+            parameters.extend(sub);
+        }
+    }
+    PyTuple::new_ref(parameters, &vm.ctx)
+}
+"""
+        r = _run({"crates/vm/src/builtins/genericalias.rs": src})
+        f = [
+            x
+            for x in r["findings"]
+            if x["type"] == "unguarded_parameter_walk_recursion"
+        ]
+        self.assertEqual(len(f), 1)
+        self.assertEqual(f[0]["details"]["cpython_issue"], "154275")
+
+    def test_guarded_parameter_walk_not_flagged(self) -> None:
+        # The same walk WITH a with_recursion guard is safe → not flagged.
+        src = """
+fn make_parameters_from_slice(args: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<PyTupleRef> {
+    vm.with_recursion("make_parameters", || {
+        let mut parameters = Vec::new();
+        for arg in args.iter() {
+            let sub = make_parameters_from_slice(&items, vm)?;
+            parameters.extend(sub);
+        }
+        Ok(PyTuple::new_ref(parameters, &vm.ctx))
+    })
+}
+"""
+        r = _run({"crates/vm/src/builtins/genericalias.rs": src})
+        self.assertFalse(
+            [
+                x
+                for x in r["findings"]
+                if x["type"] == "unguarded_parameter_walk_recursion"
+            ]
         )
 
 
