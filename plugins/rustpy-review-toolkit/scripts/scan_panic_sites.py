@@ -109,6 +109,45 @@ def _is_pure_abort_stub(body_node: object, source: bytes) -> bool:
     return bool(_STUB_BODY_RE.match(inner.strip()))
 
 
+# `X.downcast().unwrap()` — an invariant-protected downcast, distinct from a
+# Python-controllable one. Calibration from the _asyncio.rs meta-eval, where
+# 7 of 9 scanner-FIX were downcasts that cannot fail: either the subject is read
+# from a private `PyRwLock` payload field (`self.fut_exception.read()` → the type
+# is an internal invariant) or the SAME variable was `fast_isinstance`-gated just
+# above. The genuinely-exploitable downcasts (a Python-reassignable module
+# attribute, `current_task` L2408; a `__new__`-controlled `.call()` result,
+# `throw` L1081) have neither, so they stay FIX. The gate must be on the SAME
+# variable as the downcast subject: `throw` gates `exc_type` but downcasts `exc`
+# (a different value), which is exactly why it remains a (real) FIX.
+_DOWNCAST_SUBJECT_RE = re.compile(r"(\w+)\s*(?:\.clone\(\)\s*)?\.downcast\b")
+_PRIVATE_FIELD_READ_RE = re.compile(
+    r"self\.\w+(?:\.\w+)*\.(?:read|write|lock|try_read|try_write)\s*\("
+)
+_DOWNCAST_LOOKBACK = 10
+
+
+def _downcast_downranked(raw_line: str, window_text: str) -> bool:
+    """True if a `.downcast().unwrap()` on this line is invariant-protected.
+
+    Down-ranks when the downcast subject is a private RwLock field read or the
+    SAME variable was `fast_isinstance`/`fast_issubclass`-gated in the window —
+    never when the subject is a distinct Python-controllable value.
+    """
+    if ".downcast" not in raw_line:
+        return False
+    m = _DOWNCAST_SUBJECT_RE.search(raw_line)
+    if m is None:
+        return False
+    subject = m.group(1)
+    if subject == "self":
+        return True
+    if re.search(
+        rf"\b{re.escape(subject)}\.fast_is(?:instance|subclass)\s*\(", window_text
+    ):
+        return True
+    return bool(_PRIVATE_FIELD_READ_RE.search(window_text))
+
+
 def _load_reachability() -> tuple[list[dict], list[str]]:
     """Return (categories, weak_internal_tokens) from the data file."""
     data = load_data_file("rustpython_reachability_sources.json")
@@ -217,8 +256,17 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                             "\n".join(lines[max(0, ln - _GUARD_LOOKBACK) : ln])
                         )
                     )
+                    # An invariant-protected downcast (private-field read or a
+                    # same-variable isinstance gate) is not Python-controllable.
+                    downcast_guarded = (
+                        pattern in _FALLIBLE_VALUE_PATTERNS
+                        and _downcast_downranked(
+                            raw,
+                            "\n".join(lines[max(0, ln - _DOWNCAST_LOOKBACK) : ln]),
+                        )
+                    )
                     classification, confidence = _classify(
-                        tier, pattern, high, has_weak or guarded
+                        tier, pattern, high, has_weak or guarded or downcast_guarded
                     )
                     # A pure abort-macro stub body is a deliberate shadow marker,
                     # not a data crash → ACCEPTABLE.
@@ -250,6 +298,7 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                                 "high_reachability": high,
                                 "weak_invariant_signal": has_weak,
                                 "length_guarded": guarded,
+                                "downcast_guarded": downcast_guarded,
                                 "stub_body": is_stub,
                             },
                         )
