@@ -23,6 +23,13 @@ Produce a quick, scored health read of RustPython's own source. Every agent runs
 | Python-reachable panics | panic-site-auditor |
 | Unsafe soundness | unsafe-soundness-auditor |
 | GC traverse-completeness | gc-traverse-auditor |
+| Thread-safety (Class F) | thread-safety-auditor |
+| Debug-format (Class I) | debug-format-auditor |
+| C-ABI boundary | capi-panic-boundary |
+| ctypes marshalling (Class H) | ctypes-ffi-auditor |
+| Recursion guards (Class D) | recursion-guard-auditor |
+| Eager-collect parity (Class G) | eager-collect-parity |
+| Uninitialized objects (Class E) | uninitialized-object-auditor |
 | Complexity | rust-complexity-analyzer |
 | History / churn | git-history-analyzer |
 
@@ -35,7 +42,7 @@ Each dimension is scored **1–10**, starting at 10:
 - **−0 for POLICY / ACCEPTABLE**.
 - Floor at 1.
 
-**gc-traverse never emits FIX** (experimental) — score it on CONSIDER volume only, and note the experimental caveat.
+**Several v0.2 dimensions never emit FIX on static evidence** — score them on CONSIDER volume only and note the caveat: gc-traverse and capi-panic-boundary (0 fuzzer-confirmed), thread-safety (needs a concurrency differential), recursion-guard / eager-collect / uninitialized-object (need a CPython/behavioral differential). ctypes-ffi and debug-format *can* reach FIX (an int-narrow abort; a `{:?}` reaching the still-unsound `PyAtomicRef` Debug).
 
 Map to a letter: **9–10 = A**, **7–8 = B**, **5–6 = C**, **3–4 = D**, **1–2 = F**.
 

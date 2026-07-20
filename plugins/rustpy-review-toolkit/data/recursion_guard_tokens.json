@@ -1,0 +1,19 @@
+{
+  "_comment": "Class D (recursion-guard). A protocol slot that recurses into a contained Python object (calling repr/str/hash/compare on it, threading `vm`) without entering a recursion guard overflows the NATIVE stack on a deep/cyclic object → SIGSEGV (not a catchable RecursionError). RustPython guards repr with `ReprGuard` and the frame depth with `with_recursion`; str/eq/hash on the same containers are the gap. Known-open upstream umbrella #2796.",
+  "guard_tokens": [
+    "ReprGuard",
+    "with_recursion",
+    "enter_recursive_call",
+    "check_recursive_call",
+    "check_c_stack_overflow"
+  ],
+  "recursion_tokens": [
+    ".repr(vm",
+    ".str(vm",
+    ".hash(vm",
+    "._hash(vm",
+    ".rich_compare(",
+    ".reduce(vm",
+    "make_parameters"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "_comment": "Class F (thread-safety) type tokens. RustPython has NO `unsendable` attribute; the `threading` feature (an always-on default) blanket-impls Send+Sync for every #[pyclass] payload, so a payload holding non-Sync interior mutability compiles ONLY via a hand-written `unsafe impl Sync`. The scanner joins those two facts. Matched with a `\\b<token>\\s*<` word-boundary regex, which naturally excludes `AtomicCell` (from `Cell`) and `Arc` (from `Rc`).",
+  "unsafe_interior_mutability": [
+    "Cell",
+    "RefCell",
+    "UnsafeCell",
+    "Rc"
+  ],
+  "safe_shared_types": [
+    "PyRwLock",
+    "PyMutex",
+    "AtomicCell",
+    "PyAtomic",
+    "PyAtomicRef",
+    "Atomic",
+    "Radium",
+    "Arc",
+    "Mutex",
+    "RwLock",
+    "OnceLock",
+    "PyOnceLock"
+  ],
+  "sync_marker_traits": ["Sync", "Send"]
+}

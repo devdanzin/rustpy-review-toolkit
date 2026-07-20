@@ -4,6 +4,32 @@ All notable changes to rustpy-review-toolkit are documented here. The format is 
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-20
+
+**Class-expansion release: 6 → 13 agents.** Adds the seven deferred defect-class agents from design §7, each grounded against the fuzzing catalog's A–J taxonomy and the current RustPython source (`3290f287f`). Architecture: static-first — the four agents that need a CPython/concurrency differential encode the fuzzer's verified SAFE lists as scanner data and leave the differential to the agent triage step (the workflow already used to confirm RPYR-0009/0010); no automated oracle was built. Every scanner was validated end-to-end on the real tree (surfaces its fuzzer anchors, quiet on the SAFE/migrated set) and unit-tested (test count 76 → 112, all `ruff` + `mypy` clean).
+
+### Added — Tier 1 (clean structural)
+
+- **`thread-safety-auditor` (Class F)** — `scan_thread_safety.py` + `agents/thread-safety-auditor.md` + `data/interior_mutability_types.json`. **Key finding: RustPython has no `unsendable`** (0 occurrences — that is a PyO3-ism). The `threading` feature (an always-on default) blanket-impls `Send+Sync` for every `#[pyclass]` payload, so a payload holding `Cell`/`RefCell`/`UnsafeCell`/`Rc` compiles only via a hand-written `unsafe impl Sync`. The scanner joins those two facts (reachable from a `#[pyclass]`). A word-boundary matcher excludes the Sync-safe forms upstream migrated to (`AtomicCell`, `Arc<Mutex>`), so the drifted fuzzer sites (`itertools`/`_thread`) are correctly not flagged; the live cluster (`contextvars` ×4 + `frame.rs FrameUnsafeCell`) is. CONSIDER (confirmation needs a concurrency differential).
+- **`debug-format-auditor` (Class I)** — `scan_debug_format.py` + agent. Two checks: an unsound `impl Debug` that reinterprets a raw pointer in `fmt` (`.cast::<T>()`; the confirmed `PyAtomicRef` at `ext.rs:278`), and a `{:?}`/`{:#?}` trigger that Debug-formats a Python object into a user-facing string. **Severity-gated** on `debug_scan.unsound_debug_exists`: while the root is live, a trigger is a SIGSEGV path; if fixed, cosmetic.
+- **`capi-panic-boundary`** — `scan_capi_panic.py` + agent. `crates/capi` has ~379 `extern "C" fn` and **zero `catch_unwind`**, so a reached panic unwinds across the C ABI (UB); it also derefs caller pointers without NULL guards. **Experimental — 0 fuzzer-confirmed instances** (from the static experiment, not the fuzzer); framed like gc-traverse. Excludes `#[cfg(test)]` bodies.
+
+### Added — Tier 2 (targeted / tractable)
+
+- **`ctypes-ffi-auditor` (Class H)** — `scan_ctypes_ffi.py` + agent. Int→C-width narrowing in `_ctypes` that aborts (`.to_usize().expect(...)`, RUSTPY-0017 `c_char_p(2**64)`, → FIX) or silently makes a wrong pointer (`.unwrap_or(0)`, → CONSIDER). Load-bearing SAFE filter (agent): a small-int-as-pointer segfaults in **both** interpreters — only a CPython-raises/RustPython-crashes divergence counts.
+- **`recursion-guard-auditor` (Class D)** — `scan_recursion_guard.py` + agent + `data/recursion_guard_tokens.json`. A protocol slot recursing over a collection via a Python-protocol call with no `ReprGuard::enter`/`with_recursion` → native stack overflow (SIGSEGV, not a catchable RecursionError). Keys on the asymmetry that `__repr__` is guarded but `__str__`/`__eq__`/`__hash__` on the same containers are not; surfaces `genericalias`/`union` (the 0007a class). CONSIDER (upstream umbrella #2796).
+
+### Added — Tier 3 (honest-CONSIDER, human differential)
+
+- **`eager-collect-parity` (Class G)** — `scan_eager_collect.py` + agent + `data/eager_collect_safe_list.json`. A `py`/`protocol` function that binds an iterable parameter eagerly (`Vec<PyObjectRef>`/`ArgIterable<_>`) where CPython streams. The lowest-precision agent: the Python-name→helper parity chain is **opaque through `atomic_func!` slot dispatch** (the v0.1 call-graph wall), so it does site-enumeration + the fuzzer's SAFE list + a human differential. Surfaces the direct-param confirmed gaps (0012 `_generate_suggestions`, 0016 `setgroups`); helper-bound gaps (0013/0014/0015) are a documented interprocedural limitation. Class J (abort-vs-MemoryError) is filtered out of scope.
+- **`uninitialized-object-auditor` (Class E)** — `scan_uninit_object.py` + agent. A payload-touching protocol slot on a type with no `Constructor`/`DISALLOW_INSTANTIATION`, so `T.__new__(T)` yields a type-confused default payload the slot reads as garbage (SIGSEGV; the `_sre` `Match::as_mapping` 0008 class, which the scanner surfaces). The most heuristic agent — CONSIDER; the agent verifies reachability + the unchecked read.
+
+### Changed
+
+- **`commands/explore.md`** — 7 new Aspect→Agent rows; new **Phase 2C** (memory & concurrency: thread-safety, debug-format, capi-panic-boundary) and **Phase 2D** (reachability & parity: ctypes-ffi, recursion-guard, eager-collect-parity, uninitialized-object). Quality/history moved to Phase 2E. Synthesis notes the per-agent experimental caveats and the debug-format severity gate.
+- **`commands/health.md`** — 7 new scored dimensions; scoring note on which v0.2 dimensions cannot reach FIX on static evidence.
+- All four manifest version spots and the plugin descriptions updated (6 → 13 agents).
+
 ## [0.1.1] — 2026-07-20
 
 This release bundles every calibration from the four single-file meta-evaluations (`exceptions.rs`, `_asyncio.rs`, `mmap.rs`, `tuple.rs`) plus the first **whole-tree** run — all six agents on all 472 files at once — which stress-tested the toolkit at scale and produced two further panic-site calibrations. Every calibration was graded against ground truth (the agent panel's triage plus reproduction on the interpreter binary) with **zero loss of confirmed-bug coverage**.

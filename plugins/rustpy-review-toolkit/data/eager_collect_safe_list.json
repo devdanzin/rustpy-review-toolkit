@@ -1,0 +1,43 @@
+{
+  "_comment": "Class G (eager-collect-parity). A #[pyfunction]/#[pymethod]/Constructor that eagerly materializes a Python-controlled iterable into a Vec where CPython requires a sized container and rejects in O(1). The interprocedural Python-name->helper parity chain is OPAQUE through atomic_func! slot dispatch (the v0.1 wall), so this is site-enumeration + this SAFE list + a human differential (CONSIDER only). The parity gap is EXACTLY the 5 fuzzer findings 0012-0016; the general ArgIterable mechanism is NOT itself a new source once CPython type-checking is accounted for.",
+  "eager_collect_tokens": [
+    "try_to_value(vm)",
+    ".collect::<",
+    ".try_collect(",
+    "ArgIterable"
+  ],
+  "lazy_safe_tokens": [
+    "Vec<PyIter",
+    "PyIter>",
+    "Either<",
+    "PyListRef, PyTupleRef",
+    "PyTupleRef, PyListRef"
+  ],
+  "_safe_function_note": "Matched EXACTLY against the Rust fn name or Python name. Verified SAFE by the fuzzer: all/any short-circuit lazily; join/dist balloon in BOTH interpreters (Class J, out of scope); fsum/prod are bounded; attrgetter/itemgetter/methodcaller take bounded varargs.",
+  "safe_function_names": [
+    "all",
+    "any",
+    "join",
+    "dist",
+    "fsum",
+    "prod",
+    "attrgetter",
+    "itemgetter",
+    "methodcaller"
+  ],
+  "varargs_param_names": ["args", "_args", "kwargs", "_kwargs"],
+  "known_parity_gap_functions": [
+    {"function": "_generate_suggestions", "file": "suggestions.rs", "id": "RUSTPY-0012"},
+    {"function": "parse_filter_chain_spec", "file": "lzma.rs", "id": "RUSTPY-0013"},
+    {"function": "derive_and_copy_attributes", "file": "exception_group.rs", "id": "RUSTPY-0014"},
+    {"function": "setitem_by_slice", "file": "array.rs", "id": "RUSTPY-0015"},
+    {"function": "execv", "file": "posix.rs", "id": "RUSTPY-0016"},
+    {"function": "execve", "file": "posix.rs", "id": "RUSTPY-0016"},
+    {"function": "spawnv", "file": "posix.rs", "id": "RUSTPY-0016"},
+    {"function": "setgroups", "file": "posix.rs", "id": "RUSTPY-0016"}
+  ],
+  "class_j_exclusions_do_not_report": [
+    "join", "dist", "fsum-both-balloon",
+    "note: abort-vs-MemoryError (both interpreters balloon) is Class J, upstream #3493/#1779, OUT OF SCOPE"
+  ]
+}

@@ -142,9 +142,11 @@ Every scanner emits the common envelope: `{project_root, scan_root, crate_info, 
 - **The reachability tier is the discriminator** — `internal`-tier panics are default-silenced; only `py`/`protocol` surface.
 - **GC findings never exceed CONSIDER** in v0.1 — the class is real but unvalidated (0 fuzzer-confirmed instances).
 
-## 7. Deferred roadmap (v0.2+)
+## 7. Roadmap
 
-CPython **differential oracle** (dynamic harness — "turns a panic into a bug") · **thread-safety-auditor** (Class F) · **debug-format-auditor** (Class I, severity-gated) · **capi-panic-boundary** + capi null-deref · **eager-collect-parity** (Class G) · **recursion-guard** (D) · **uninitialized-object** (E) · **ctypes-ffi** (H) · **`RefCount` protocol** loom/TSan research · GC-traverse validation (drive the collector under a stress harness to confirm the static candidates).
+**Shipped in v0.2.0 (6 → 13 agents):** **thread-safety-auditor** (Class F) · **debug-format-auditor** (Class I, severity-gated) · **capi-panic-boundary** + capi null-deref · **eager-collect-parity** (Class G) · **recursion-guard** (D) · **uninitialized-object** (E) · **ctypes-ffi** (H). Each is static-first: the four needing a CPython/concurrency differential encode the fuzzer's verified SAFE lists as scanner data and leave the differential to agent triage — no automated oracle. capi-panic-boundary and (still) gc-traverse carry 0 fuzzer-confirmed instances and are framed accordingly.
+
+**Still deferred (v0.3+):** the CPython **differential oracle** as an automated dynamic harness ("turns a panic into a bug") · **`RefCount` protocol** loom/TSan research · GC-traverse validation (drive the collector under a stress harness to confirm the static candidates) · the frame-execution race (fuzzer 0023, a generic unfixturable sink) · subinterpreter issues.
 
 ## 8. Vendoring model
 

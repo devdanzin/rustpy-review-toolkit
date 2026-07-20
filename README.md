@@ -44,12 +44,19 @@ Point them at a RustPython checkout:
 | `panic-site-auditor` | **flagship** — Python-reachable panics, ranked by provenance |
 | `unsafe-soundness-auditor` | **crown jewel** — object-model cast inconsistency + handle transmute |
 | `gc-traverse-auditor` | first-class, experimental — cycle-collector completeness |
+| `thread-safety-auditor` | Class F — non-Sync interior mutability on a shared `#[pyclass]` payload force-marked Sync |
+| `debug-format-auditor` | Class I — `{:?}` on a Python object reaching the unsound `PyAtomicRef` Debug (severity-gated) |
+| `capi-panic-boundary` | panics + unguarded pointer derefs across the C ABI in `crates/capi` (experimental) |
+| `ctypes-ffi-auditor` | Class H — int→pointer narrowing in `_ctypes` |
+| `recursion-guard-auditor` | Class D — unguarded protocol recursion → native stack overflow |
+| `eager-collect-parity` | Class G — eager iterable binding where CPython streams (needs a CPython differential) |
+| `uninitialized-object-auditor` | Class E — a payload slot on a `T.__new__(T)` instance |
 | `rust-complexity-analyzer` | complexity hotspots (dispatch-match aware) |
 | `git-history-analyzer` | similar-unfixed-bug detection, RustPython bug lexicon |
 
 ## How it works
 
-Tree-sitter-rust parses RustPython's source; the internals mapper attributes every Rust site to its Python name and reachability tier; the scanners overlay their pattern checks on that classification. The design is **static-first** — a CPython differential oracle and the thread-safety / debug-format / capi-panic agents are deferred to v0.2 (see [`rustpy-review-toolkit-design.md`](rustpy-review-toolkit-design.md)).
+Tree-sitter-rust parses RustPython's source; the internals mapper attributes every Rust site to its Python name and reachability tier; the scanners overlay their pattern checks on that classification. The design is **static-first**: the v0.2 class-expansion agents that need a CPython/concurrency differential (thread-safety, ctypes, eager-collect, recursion, uninit) encode the fuzzer's verified SAFE lists as data and leave the differential to agent triage. An automated differential oracle and `RefCount` loom/TSan research remain deferred (see [`rustpy-review-toolkit-design.md`](rustpy-review-toolkit-design.md)).
 
 ## Family of toolkits
 

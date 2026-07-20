@@ -1,5 +1,5 @@
 ---
-description: "Comprehensive soundness review of the RustPython interpreter's own Rust source. Runs the six agents in phased groups: discovery + preflight orientation, then the flagship panic-site auditor alongside unsafe-soundness and GC-traverse, then complexity and history, then synthesis."
+description: "Comprehensive soundness review of the RustPython interpreter's own Rust source. Runs the thirteen agents in phased groups: discovery + preflight orientation, the flagship panic-site auditor alongside unsafe-soundness and GC-traverse, the v0.2 class-expansion agents (thread-safety, debug-format, capi-panic-boundary, ctypes-ffi, recursion-guard, eager-collect-parity, uninitialized-object), then complexity and history, then synthesis."
 argument-hint: "[scope] [aspects]"
 allowed-tools: ["Bash", "Glob", "Grep", "Read", "Task"]
 ---
@@ -23,6 +23,13 @@ Run an implementer-perspective review of the RustPython interpreter itself — t
 | `panic` | panic-site-auditor |
 | `unsafe` | unsafe-soundness-auditor |
 | `traverse` | gc-traverse-auditor |
+| `thread-safety` | thread-safety-auditor |
+| `debug-format` | debug-format-auditor |
+| `capi` | capi-panic-boundary |
+| `ctypes` | ctypes-ffi-auditor |
+| `recursion` | recursion-guard-auditor |
+| `eager-collect` | eager-collect-parity |
+| `uninit` | uninitialized-object-auditor |
 | `complexity` | rust-complexity-analyzer |
 | `history` | git-history-analyzer |
 | `all` | every agent above |
@@ -48,7 +55,22 @@ Dispatch in parallel:
 - `unsafe-soundness-auditor` (the object-model cast-inconsistency / transmute crown jewel)
 - `gc-traverse-auditor` (experimental, first-class — GC completeness)
 
-### Phase 2B: Quality and history
+### Phase 2C: Class-expansion — memory & concurrency (v0.2)
+
+Dispatch in parallel:
+- `thread-safety-auditor` (Class F — non-Sync interior mutability on a shared `#[pyclass]` payload)
+- `debug-format-auditor` (Class I — `{:?}` on a Python object; severity-gated on the unsound `PyAtomicRef` Debug)
+- `capi-panic-boundary` (panics + unguarded pointer derefs across the C ABI in `crates/capi`; **experimental, 0 fuzzer-confirmed**)
+
+### Phase 2D: Class-expansion — reachability & parity (v0.2)
+
+Dispatch in parallel:
+- `ctypes-ffi-auditor` (Class H — int→pointer narrowing in `_ctypes`)
+- `recursion-guard-auditor` (Class D — unguarded recursion in a protocol slot)
+- `eager-collect-parity` (Class G — eager iterable binding where CPython streams; **lowest-precision, needs a CPython differential**)
+- `uninitialized-object-auditor` (Class E — a payload slot on a `T.__new__(T)` instance)
+
+### Phase 2E: Quality and history
 
 Dispatch in parallel:
 - `rust-complexity-analyzer`
@@ -58,11 +80,11 @@ Dispatch in parallel:
 
 Aggregate every agent's report. Deduplicate findings surfaced by multiple agents (same file:line). Produce a unified summary at `reports/<target>_v1/SUMMARY.md`:
 
-1. **Top FIX findings** across all agents (panic-site FIX + unsafe-soundness FIX first).
+1. **Top FIX findings** across all agents (panic-site FIX + unsafe-soundness FIX + ctypes int-narrow FIX first).
 2. **Per-crate breakdown** of FIX / CONSIDER / POLICY / ACCEPTABLE counts.
 3. **Per-agent links** to the detailed reports.
-4. **The experimental caveat** on gc-traverse (0 fuzzer-confirmed instances).
-5. **Calibration notes** observed across the run.
+4. **The experimental caveats**: gc-traverse and capi-panic-boundary have 0 fuzzer-confirmed instances; thread-safety needs a concurrency differential; eager-collect and uninit need a CPython differential — none of these reach FIX on static evidence alone.
+5. **The debug-format severity gate** (is the unsound `PyAtomicRef` Debug still live?) and any **calibration notes** observed across the run.
 
 ## Output
 
