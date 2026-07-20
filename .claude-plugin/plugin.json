@@ -1,6 +1,6 @@
 {
   "name": "rustpy-review-toolkit",
-  "version": "0.1.0-dev",
+  "version": "0.1.1",
   "description": "Analysis agents for the RustPython interpreter itself — the runtime, not extensions built with it. Flagship: Python-reachable panic sites inside the VM (.unwrap()/.expect()/panic!/index) tiered by protocol-trait reachability (py > protocol > internal), so a runtime panic a Python program can trigger surfaces while internal-invariant panics stay silent. Plus unsafe-soundness auditing (the PyAtomicRef cross-method pointer-cast inconsistency and handle-transmute-without-TransmuteFromObject-guard class), GC Traverse-completeness for the cycle collector (owned-ref payload fields with no traverse opt-in → uncollectable cycles), Rust complexity measurement, and git history analysis. RustPython is NOT PyO3: it shares the vocabulary (PyRef, PyResult, #[pyclass]) but has its own object model, RefCount, Traverse/clear GC, QSBR, and threading-feature toggle, so every check is RustPython-native. Tree-sitter-rust parsing, static-first, with optional clippy/miri/cargo-expand integration.",
   "author": {
     "name": "Charlie Lin and Danzin"

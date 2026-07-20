@@ -1,6 +1,6 @@
 {
   "name": "rustpy-review-toolkit",
-  "version": "0.1.0-dev",
+  "version": "0.1.1",
   "description": "Analysis agents for the RustPython interpreter's own Rust source. Flagship (safety-critical): Python-reachable panic sites tiered by protocol-trait reachability — .unwrap()/.expect()/panic!/unreachable!/index/arity exprs in the VM, builtins, types, and stdlib, ranked py > protocol > internal so a runtime abort a Python program can trigger surfaces and internal-invariant panics stay silent. Unsafe-soundness: cross-method pointer-cast inconsistency (the PyAtomicRef Debug SIGSEGV shape) and handle-type transmute without a preceding TransmuteFromObject::check or repr(transparent) SAFETY. GC Traverse-completeness: #[pyclass] payloads owning PyObjectRef/PyRef fields with no traverse/traverse=\"manual\" opt-in, #[pytraverse(skip)] on ref-owning fields, and manual fn traverse bodies missing an owned-ref field. Plus reused complexity measurement and git history analysis. Tree-sitter-rust parsing with optional clippy/miri/cargo-expand integration; static-first (CPython differential oracle deferred to v0.2).",
   "author": {
     "name": "Charlie Lin and Danzin"

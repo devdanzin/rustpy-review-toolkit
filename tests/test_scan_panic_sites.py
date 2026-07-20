@@ -367,5 +367,156 @@ impl PyFoo {
         self.assertEqual(f["classification"], "CONSIDER")
 
 
+class TestWholeTreeCalibrations(unittest.TestCase):
+    """Calibration from the first whole-tree run (v0.1.1): owner-downcast on the
+    literal `Self`, multi-line downcast chains, aliased-length + same-line
+    is_empty guards, and the full-slice exclusion — plus regression guards that
+    lock in that none of these down-rank a real bug."""
+
+    def test_self_owner_downcast_is_downranked(self) -> None:
+        # `zelf.downcast_ref::<Self>()` in a #[pyslot] — the slot wrapper only
+        # dispatches on the owner type, so this is airtight (bytearray/bytes/
+        # descriptor/_io shape). Target spelled `Self`, not the concrete type.
+        src = """
+impl PyByteArray {
+    #[pyslot]
+    fn slot_str(zelf: &PyObject, vm: &VirtualMachine) -> PyResult<PyStrRef> {
+        let zelf = zelf.downcast_ref::<Self>().expect("expected bytearray");
+        Ok(zelf.repr(vm)?)
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/bytearray.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "expect")
+        self.assertTrue(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_multiline_self_downcast_is_downranked(self) -> None:
+        # The _ctypes/simple.rs:1302 shape: the `.expect()` sits one line below the
+        # `.downcast_ref::<Self>()` in a multi-line chain. The 2-line detect window
+        # must still see the downcast.
+        src = """
+impl AsNumber for PyCSimple {
+    fn as_number() -> &'static PyNumberMethods {
+        fn inner(obj: &PyObject, vm: &VirtualMachine) -> PyResult<bool> {
+            let zelf = obj
+                .downcast_ref::<Self>()
+                .expect("non-PyCSimple");
+            Ok(true)
+        }
+    }
+}
+"""
+        r = _run({"crates/vm/src/stdlib/_ctypes/simple.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "expect")
+        self.assertTrue(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_aliased_length_guard_downranked(self) -> None:
+        # `let num_args = args.args.len(); if num_args == 1 { args.args[0] }` — the
+        # arity is aliased to a local, which the plain len-adjacent regex misses
+        # (type.rs:2806, _thread.rs:495 shape).
+        src = """
+impl PyType {
+    #[pyslot]
+    fn slot_call(zelf: PyObjectRef, args: FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let num_args = args.args.len();
+        if num_args == 1 {
+            return Ok(args.args[0].clone());
+        }
+        Ok(zelf)
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/type.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "args-index")
+        self.assertTrue(f["details"]["length_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_same_line_isempty_guard_downranked(self) -> None:
+        # `if !x.is_empty() && x.last().unwrap()` — a same-line is_empty guard on
+        # a .last()/.first() (the _functools.rs:260 shape).
+        src = """
+impl PyPartial {
+    #[pymethod]
+    fn check(&self, args_slice: &[PyObjectRef], vm: &VirtualMachine) -> PyResult<()> {
+        if !args_slice.is_empty() && is_placeholder(args_slice.last().unwrap()) {
+            return Err(vm.new_type_error("no"));
+        }
+        Ok(())
+    }
+}
+"""
+        r = _run({"crates/vm/src/stdlib/_functools.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertTrue(f["details"]["length_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_full_slice_match_not_flagged_as_index(self) -> None:
+        # `match &args.args[..]` is a full-slice reborrow (never panics); its arms
+        # handle arity (set.rs:989). No args-index finding should be emitted.
+        src = """
+impl PySet {
+    #[pyslot]
+    fn slot_new(args: FuncArgs, vm: &VirtualMachine) -> PyResult<Self> {
+        match &args.args[..] {
+            [] => Ok(Self::default()),
+            _ => Ok(Self::default()),
+        }
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/set.rs": src})
+        self.assertFalse(
+            [f for f in r["findings"] if f["details"]["pattern"] == "args-index"]
+        )
+
+    # --- regression guards: these must STAY FIX (the two bugs found in review) ---
+
+    def test_different_line_isempty_does_not_downrank(self) -> None:
+        # REGRESSION (mmap.rs:795): a `sub.is_empty()` guarding an unrelated
+        # empty-substring branch several lines above must NOT down-rank a later
+        # fallible access. is_empty is trusted only on the SAME line.
+        src = """
+impl PyMmap {
+    #[pymethod]
+    fn find(&self, options: FindOptions, vm: &VirtualMachine) -> PyResult<PyInt> {
+        let sub = &options.sub;
+        if sub.is_empty() {
+            return Ok(PyInt::from(0));
+        }
+        let n = options.value.downcast::<PyInt>().unwrap();
+        Ok(PyInt::from(0))
+    }
+}
+"""
+        r = _run({"crates/vm/src/stdlib/mmap.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertFalse(f["details"]["length_guarded"])
+        self.assertEqual(f["classification"], "FIX")
+
+    def test_comment_does_not_fake_arity_guard(self) -> None:
+        # REGRESSION (itertools.rs:1412): a `let n = pool.len()` plus a comment
+        # `// r == n` must NOT satisfy the arity-alias guard — comments are
+        # stripped from the guard window before matching.
+        src = """
+impl PyItertoolsPermutations {
+    #[pyslot]
+    fn slot_new(iterable: PyObjectRef, r: PyIntRef, vm: &VirtualMachine) -> PyResult<Self> {
+        let pool: Vec<PyObjectRef> = iterable.try_to_value(vm)?;
+        let n = pool.len();
+        // If r is not provided, r == n.
+        let r = r.as_bigint();
+        let r = r.to_usize().unwrap();
+        Ok(Self::default())
+    }
+}
+"""
+        r = _run({"crates/vm/src/stdlib/itertools.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertFalse(f["details"]["length_guarded"])
+        self.assertEqual(f["classification"], "FIX")
+
+
 if __name__ == "__main__":
     unittest.main()

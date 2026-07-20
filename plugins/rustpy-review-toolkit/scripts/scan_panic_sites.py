@@ -80,6 +80,48 @@ _LENGTH_GUARD_RE = re.compile(
 # including guards a nested block pushes ~14 lines above the index).
 _GUARD_LOOKBACK = 16
 
+# An arity bound to a local (`let given = f_args.args.len();`) and then compared
+# (`if given < 2`, `if num_args == 1`) is a length guard the plain regex above
+# cannot see — the intermediate binding breaks the `len()`-adjacent-to-comparison
+# shape it keys on. Detect the alias binding + a comparison on that same local.
+# Calibration from the whole-tree run (`type.rs:2806`, `_thread.rs:495/496`).
+_LEN_ALIAS_RE = re.compile(r"\blet\s+(\w+)\s*=\s*[^;]*\.len\(\)")
+
+# A full-slice reborrow `x[..]` never panics (unlike an index `x[N]`), so an
+# `args-index` hit that is really `.args[..]` (typically `match &args.args[..]`,
+# whose arms handle arity) is not a crash site. Calibration from `set.rs:989`.
+_FULL_SLICE_RE = re.compile(r"\.args\s*\[\s*\.\.\s*\]")
+
+# A `.is_empty()` guard is only trusted on the SAME line as the fallible access
+# (`if !x.is_empty() && x.last().unwrap()`, `_functools.rs:260`). A bare
+# `.is_empty()` elsewhere in the window guards an unrelated case (e.g. mmap's
+# `sub.is_empty()` protects the empty-substring branch, NOT the `[start..end]`
+# slice) and must not down-rank — hence same-line only.
+_SAME_LINE_EMPTY_RE = re.compile(r"\.is_empty\(\)")
+
+# `//` line comments in the guard window can fake a guard (`// r == n` looks like
+# an arity comparison); strip them before matching. Calibration from the
+# whole-tree run (`itertools.rs:1412` permutations, whose `let n = pool.len()` +
+# the comment `// r == n` falsely satisfied the arity-alias guard).
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _strip_line_comments(text: str) -> str:
+    """Drop `//` line comments so a comment cannot fake a guard."""
+    return _LINE_COMMENT_RE.sub("", text)
+
+
+def _arity_alias_guarded(window_text: str) -> bool:
+    """True if an arity is bound to a local (`let n = x.len()`) and compared."""
+    for m in _LEN_ALIAS_RE.finditer(window_text):
+        var = re.escape(m.group(1))
+        if re.search(rf"\b{var}\s*(?:==|!=|>=|<=|>|<)", window_text) or re.search(
+            rf"(?:==|!=|>=|<=|>|<)\s*{var}\b", window_text
+        ):
+            return True
+    return False
+
+
 # A function body that is nothing but a single `unreachable!(...)` /
 # `unimplemented!(...)` macro is a deliberate "this is not the live impl" marker
 # — in RustPython these shadow a sibling `slot_*` form (`unreachable!("slot_init
@@ -128,6 +170,11 @@ _DOWNCAST_TARGET_RE = re.compile(
     r"\.downcast(?:_ref|_exact)?\s*::\s*<\s*([A-Za-z_][\w:]*)"
 )
 _DOWNCAST_LOOKBACK = 10
+# The downcast that a `.unwrap()`/`.expect()` fails on can sit one line up in a
+# multi-line method chain (`let zelf = obj\n.downcast_ref::<Self>()\n.expect(…)`).
+# Detect the downcast over the current line + this many preceding lines so those
+# splits are seen. Calibration from the whole-tree run (`_ctypes/simple.rs:1302`).
+_DOWNCAST_DETECT_LOOKBACK = 2
 
 
 def _bare_type(text: str) -> str:
@@ -136,27 +183,34 @@ def _bare_type(text: str) -> str:
 
 
 def _downcast_downranked(
-    raw_line: str, window_text: str, self_type: str | None = None
+    detect_text: str, window_text: str, self_type: str | None = None
 ) -> bool:
-    """True if a `.downcast().unwrap()` on this line is invariant-protected.
+    """True if a `.downcast().unwrap()` is invariant-protected.
 
     Down-ranks when: the subject is a private RwLock field read; the SAME
     variable was `fast_isinstance`/`fast_issubclass`-gated in the window; or the
-    downcast target type is the ENCLOSING impl's own type (a protocol/py slot in
-    `impl … for X` downcasting to `X` — the slot-wrapper's `fast_isinstance(X)`
-    guard makes it airtight, since X's subclasses share X's Rust payload; the
-    `as_number` L488 false-positive class from the tuple.rs meta-eval). Never
-    down-ranks a distinct Python-controllable value (a module attribute, a
-    `.call()` result, or a downcast whose target differs from the slot owner).
+    downcast target type is the ENCLOSING impl's own type — a protocol/py slot in
+    `impl … for X` downcasting to `X` (or, equivalently, to the literal `Self`).
+    The slot-wrapper's `fast_isinstance(X)` guard makes the owner-downcast
+    airtight, since X's subclasses share X's Rust payload; this is the
+    `as_number` L488 (tuple.rs) and the `zelf.downcast::<Self>()` slot class
+    (bytearray/bytes/descriptor/_io, whole-tree run). ``detect_text`` is the
+    current line plus a couple preceding lines, so a multi-line downcast chain is
+    still recognized. Never down-ranks a distinct Python-controllable value (a
+    module attribute, a `.call()` result, or a downcast whose target differs from
+    the slot owner) — those keep their FIX.
     """
-    if ".downcast" not in raw_line:
+    if ".downcast" not in detect_text:
         return False
-    # Owner-type downcast: target == the enclosing impl's Self type.
+    # Owner-type downcast: target is the enclosing impl's Self type, or the
+    # literal `Self` (the same type inside `impl … for X`).
     if self_type:
-        tm = _DOWNCAST_TARGET_RE.search(raw_line)
-        if tm is not None and _bare_type(tm.group(1)) == _bare_type(self_type):
-            return True
-    m = _DOWNCAST_SUBJECT_RE.search(raw_line)
+        tm = _DOWNCAST_TARGET_RE.search(detect_text)
+        if tm is not None:
+            target = _bare_type(tm.group(1))
+            if target == _bare_type(self_type) or target == "Self":
+                return True
+    m = _DOWNCAST_SUBJECT_RE.search(detect_text)
     if m is None:
         return False
     subject = m.group(1)
@@ -264,6 +318,10 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                 for needle, pattern in PATTERNS:
                     if needle not in raw:
                         continue
+                    # A full-slice reborrow `.args[..]` never panics — not a
+                    # crash site, even though it matches the `.args[` needle.
+                    if pattern == "args-index" and _FULL_SLICE_RE.search(raw):
+                        continue
                     if tier == "internal" and not include_internal:
                         internal_suppressed += 1
                         continue
@@ -271,18 +329,27 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                     matched, high, has_weak = _reachability_signals(window, cats, weak)
                     # A fallible-value panic inside a length/arity guard is very
                     # likely a bounded false positive → down-rank like a weak
-                    # signal. An unguarded arity index stays FIX.
-                    guarded = pattern in _FALLIBLE_VALUE_PATTERNS and bool(
-                        _LENGTH_GUARD_RE.search(
-                            "\n".join(lines[max(0, ln - _GUARD_LOOKBACK) : ln])
-                        )
+                    # signal. Covers a direct `.len()`/`.is_empty()` guard and an
+                    # arity aliased to a local (`let n = x.len(); if n == 1`). An
+                    # unguarded arity index stays FIX.
+                    guard_window = _strip_line_comments(
+                        "\n".join(lines[max(0, ln - _GUARD_LOOKBACK) : ln])
                     )
-                    # An invariant-protected downcast (private-field read or a
-                    # same-variable isinstance gate) is not Python-controllable.
+                    guarded = pattern in _FALLIBLE_VALUE_PATTERNS and (
+                        bool(_LENGTH_GUARD_RE.search(guard_window))
+                        or _arity_alias_guarded(guard_window)
+                        or bool(_SAME_LINE_EMPTY_RE.search(raw))
+                    )
+                    # An invariant-protected downcast (owner-type / private-field
+                    # read / same-variable isinstance gate) is not
+                    # Python-controllable. Detected over a small multi-line window
+                    # so a split `obj\n.downcast_ref::<Self>()\n.expect()` is seen.
                     downcast_guarded = (
                         pattern in _FALLIBLE_VALUE_PATTERNS
                         and _downcast_downranked(
-                            raw,
+                            "\n".join(
+                                lines[max(0, ln - _DOWNCAST_DETECT_LOOKBACK) : ln]
+                            ),
                             "\n".join(lines[max(0, ln - _DOWNCAST_LOOKBACK) : ln]),
                             fn["class"],
                         )
