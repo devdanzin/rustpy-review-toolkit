@@ -19,8 +19,8 @@
     {
       "name": "user_index_or_arity",
       "weight": "high",
-      "why": "an index/slice/arity taken from Python (args[N], a user-supplied position) can be out of bounds — the classic OOB panic (structseq, itertools cycle, csv)",
-      "tokens": [".args[", "args[", "[0]", "[1]", ".get(", "get_unchecked", "nth(", ".index(", "..=", "position", "slice"]
+      "why": "an index/slice/arity taken from Python (args[N], a user-supplied position, get_arg(N)) can be out of bounds — the classic OOB panic (structseq, itertools cycle, csv, ImportError.__reduce__ empty-args)",
+      "tokens": [".args[", "args[", "[0]", "[1]", ".get(", "get_arg(", ".get_arg(", "get_unchecked", "nth(", ".index(", "..=", "position", "slice"]
     },
     {
       "name": "repr_or_str",

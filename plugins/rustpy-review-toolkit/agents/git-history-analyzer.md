@@ -35,10 +35,12 @@ The script's `migration` category is PyO3-tuned and will simply not match RustPy
 ### Phase 1: Run the history script
 
 ```
-python <plugin_root>/scripts/analyze_history.py <path> --days 365
+python <plugin_root>/scripts/analyze_history.py <path> --days 365 --max-commits 8000
 ```
 
 `analyze_history.py` takes `argv` (not the `analyze(target, max_files)` convention). Flags: `--days N`, `--since`/`--until`, `--last N`, `--max-commits N`, `--no-function`. Output: `summary` (by category), `file_churn`, `function_churn`, `recent_fixes` (with diffs).
+
+**RustPython churns fast — override `--max-commits`.** The script defaults to `--max-commits 2000`, which on RustPython (~2000 commits/7 months, 16k+ total) silently truncates a `--days 365`/`730` window to roughly a quarter of the range you asked for, and will miss the older "reference fix" and "bug-introduced" commits that make a regression-vs-latent determination possible. **Always pass an explicit `--max-commits` (8000+ for a 1–2 year window) or use `--since <date>`**, and sanity-check the returned commit-date range against what you requested — if `total_commits` comes back exactly `2000`, the window was capped. Your unbounded manual `git log -S`/`--grep` calls (Phase 2) are not subject to this cap and should cover the full requested span. *(Toolkit note: the default-cap-vs-window interaction is a limitation of the shared, vendored `analyze_history.py`; the proper fix — clamp the window to the requested `--days`/`--since` rather than a fixed commit count — belongs upstream in rust-ext-review-toolkit and syncs forward. Do not edit the vendored copy here.)*
 
 ### Phase 2: Similar-bug detection
 

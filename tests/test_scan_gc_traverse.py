@@ -80,6 +80,46 @@ pub struct PyFrozenSet {
         self.assertIn("PyFrozenSet", names)
 
 
+class TestPyExceptionSupport(unittest.TestCase):
+    """The #[pyexception] blind-spot fix (from the exceptions.rs meta-eval)."""
+
+    def test_pyexception_custom_payload_forgotten_traverse_is_caught(self) -> None:
+        # A #[pyexception] payload that owns a ref field but declares no
+        # traverse — the recall gap the meta-eval surfaced. Now caught.
+        rust = """
+#[pyexception(name, base = PyException, ctx = "custom_error")]
+#[repr(C)]
+pub struct PyCustomError {
+    base: PyException,
+    payload: PyAtomicRef<Option<PyObject>>,
+}
+"""
+        f = _of_type(_run(rust), "missing_traverse")
+        names = {x["details"]["payload"] for x in f}
+        self.assertIn("PyCustomError", names)
+
+    def test_pyexception_with_manual_traverse_not_flagged(self) -> None:
+        rust = """
+#[pyexception(name, base = PyException, ctx = "stop_iteration", traverse = "manual")]
+#[repr(C)]
+pub struct PyStopIteration {
+    base: PyException,
+    value: PyAtomicRef<Option<PyObject>>,
+}
+"""
+        self.assertEqual(_of_type(_run(rust), "missing_traverse"), [])
+
+    def test_transparent_newtype_exception_not_flagged(self) -> None:
+        # A #[pyexception] transparent newtype reuses its base's payload (empty
+        # named-field list) → must NOT be a missing_traverse false positive.
+        rust = """
+#[pyexception(name, base = PyLookupError, ctx = "key_error", impl)]
+#[repr(transparent)]
+pub struct PyKeyError(PyLookupError);
+"""
+        self.assertEqual(_of_type(_run(rust), "missing_traverse"), [])
+
+
 class TestSkipOnRefField(unittest.TestCase):
     def test_skip_on_bigint_field_is_correct_not_flagged(self) -> None:
         # The enumerate calibration: skip on `counter: PyRwLock<BigInt>` is fine.

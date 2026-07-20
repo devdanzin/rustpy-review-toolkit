@@ -131,5 +131,123 @@ impl PyFoo {
         self.assertEqual(f["classification"], "CONSIDER")
 
 
+class TestCalibrationFixes(unittest.TestCase):
+    """Calibration from the exceptions.rs deep-dive (v0.1.1)."""
+
+    def test_get_arg_unwrap_is_fix(self) -> None:
+        # The ImportError.__reduce__ shape (exceptions.rs:1872): get_arg(0) on a
+        # possibly-empty args tuple, unwrapped, with no length guard → FIX. The
+        # get_arg( token must fire the user_index_or_arity signal.
+        src = """
+impl PyImportError {
+    #[pymethod]
+    fn __reduce__(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        Ok(vm.new_tuple((self.get_arg(0).unwrap(),)).into())
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertEqual(f["classification"], "FIX")
+        self.assertIn("user_index_or_arity", f["details"]["reachability_signals"])
+        self.assertFalse(f["details"]["length_guarded"])
+
+    def test_guarded_arity_index_downgraded_to_consider(self) -> None:
+        # args[N] inside an `if (2..=5).contains(&len)` guard → CONSIDER, not FIX.
+        src = """
+impl PyOSError {
+    #[pyslot]
+    fn slot_init(&self, args: FuncArgs, vm: &VirtualMachine) -> PyResult<()> {
+        let len = args.args.len();
+        if (2..=5).contains(&len) {
+            let errno = args.args[0].clone();
+            let msg = args.args[1].clone();
+        }
+        Ok(())
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        idx = [f for f in r["findings"] if f["details"]["pattern"] == "args-index"]
+        self.assertTrue(idx)
+        for f in idx:
+            self.assertTrue(f["details"]["length_guarded"])
+            self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_unguarded_arity_index_stays_fix(self) -> None:
+        # No length guard (the _typing._idfunc / RUSTPY-0005 shape) → FIX.
+        src = """
+#[pyfunction]
+fn idfunc(args: FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+    Ok(args.args[0].clone())
+}
+"""
+        r = _run({"crates/vm/src/stdlib/typing.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "args-index")
+        self.assertFalse(f["details"]["length_guarded"])
+        self.assertEqual(f["classification"], "FIX")
+
+    def test_pure_unreachable_stub_is_acceptable(self) -> None:
+        # A shadow stub (`unreachable!("slot_init is defined")`) → ACCEPTABLE.
+        src = """
+impl Initializer for PyFoo {
+    fn init(&self) {
+        unreachable!("slot_init is defined")
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unreachable")
+        self.assertTrue(f["details"]["stub_body"])
+        self.assertEqual(f["classification"], "ACCEPTABLE")
+
+    def test_pure_unimplemented_stub_is_acceptable(self) -> None:
+        src = """
+impl Constructor for PyFoo {
+    fn py_new(&self) {
+        unimplemented!("use slot_new")
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unimplemented")
+        self.assertEqual(f["classification"], "ACCEPTABLE")
+
+    def test_todo_stub_stays_consider(self) -> None:
+        # todo! is genuinely unimplemented work — NOT down-ranked.
+        src = """
+impl PyFoo {
+    #[pymethod]
+    fn not_done(&self) {
+        todo!()
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "todo")
+        self.assertFalse(f["details"]["stub_body"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_unreachable_among_other_code_is_not_a_stub(self) -> None:
+        # An `unreachable!` after real logic (an exhaustive match) is NOT a pure
+        # stub → stays CONSIDER (the agent judges exhaustiveness).
+        src = """
+impl PyFoo {
+    #[pymethod]
+    fn m(&self, x: i32) -> i32 {
+        let y = x + 1;
+        match y {
+            0 => 1,
+            _ => unreachable!(),
+        }
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unreachable")
+        self.assertFalse(f["details"]["stub_body"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+
 if __name__ == "__main__":
     unittest.main()

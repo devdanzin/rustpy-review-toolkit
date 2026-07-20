@@ -27,13 +27,14 @@ Python + tree-sitter, plus the reachability ranking the seed did not have.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_rustpy import build_rustpy_report, discover  # noqa: E402
 from map_rustpy_internals import classify_functions, load_protocol_traits  # noqa: E402
-from rust_ts_utils import parse_bytes  # noqa: E402
+from rust_ts_utils import parse_bytes, strip_comments  # noqa: E402
 from scan_common import (  # noqa: E402
     deduplicate_findings,
     discover_rust_files,
@@ -59,6 +60,53 @@ PATTERNS: tuple[tuple[str, str], ...] = (
 # Patterns that panic on a *fallible value* (as opposed to an explicit abort
 # macro). These are the ones the reachability ranking is meaningful for.
 _FALLIBLE_VALUE_PATTERNS = frozenset({"unwrap", "expect", "args-index"})
+
+# A length/arity guard in the enclosing context — an `if (2..=5).contains(&len)`,
+# a `match args.len()` arm, an `if len == 2`, etc. When a fallible-value panic
+# (typically `args[N]` / `get_arg(N)`) sits inside one, the index is bounded and
+# the site is very likely a false positive; it is down-ranked to CONSIDER. An
+# UNGUARDED arity index (the `_typing._idfunc` shape, RUSTPY-0005) has no such
+# guard and stays FIX. Calibration from the exceptions.rs deep-dive, where all
+# 14 scanner-FIX arity indices were guarded false positives.
+_LENGTH_GUARD_RE = re.compile(
+    r"\.len\(\)\s*(?:==|!=|>=|<=|>|<)"  # x.len() == N
+    r"|(?:==|!=|>=|<=|>|<)\s*[\w.]*\.?len\(\)"  # N <= x.len()
+    r"|(?:==|>=|<=|>|<)\s*len\b"  # >= len
+    r"|\blen\s*(?:==|>=|<=|>|<)"  # len >= N
+    r"|match\s+[\w.]+\.len\(\)"  # match x.len()
+    r"|\.contains\(&?\s*\w*len"  # (N..=M).contains(&len)
+)
+# How far back to look for the guard (covers a match arm / if-block header,
+# including guards a nested block pushes ~14 lines above the index).
+_GUARD_LOOKBACK = 16
+
+# A function body that is nothing but a single `unreachable!(...)` /
+# `unimplemented!(...)` macro is a deliberate "this is not the live impl" marker
+# — in RustPython these shadow a sibling `slot_*` form (`unreachable!("slot_init
+# is defined")`, `unimplemented!("use slot_new")`). The panic in such a stub is
+# not a data-dependent crash, so it is classified ACCEPTABLE rather than
+# surfaced. `todo!` is deliberately NOT included — a `todo!()` body is genuinely
+# unimplemented work worth a CONSIDER. Calibration from the exceptions.rs
+# meta-eval (10+ shadowed `unreachable!` init stubs).
+_STUB_BODY_RE = re.compile(
+    r"^(?:unreachable|unimplemented)!\s*\(.*?\)\s*;?$", re.DOTALL
+)
+
+
+def _is_pure_abort_stub(body_node: object, source: bytes) -> bool:
+    """True if a fn body is nothing but one `unreachable!`/`unimplemented!`."""
+    inner = (
+        strip_comments(
+            source[body_node.start_byte : body_node.end_byte]  # type: ignore[attr-defined]
+        )
+        .decode("utf-8", "replace")
+        .strip()
+    )
+    if inner.startswith("{"):
+        inner = inner[1:]
+    if inner.endswith("}"):
+        inner = inner[:-1]
+    return bool(_STUB_BODY_RE.match(inner.strip()))
 
 
 def _load_reachability() -> tuple[list[dict], list[str]]:
@@ -146,6 +194,7 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
             if body is None:
                 continue
             tier = fn["reachable"]
+            is_stub = _is_pure_abort_stub(body, source)
             b_start = body.start_point[0] + 1
             b_end = body.end_point[0] + 1
             for ln in range(b_start, min(b_end, len(lines)) + 1):
@@ -160,9 +209,21 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                         continue
                     window = "\n".join(lines[max(0, ln - 4) : ln])
                     matched, high, has_weak = _reachability_signals(window, cats, weak)
-                    classification, confidence = _classify(
-                        tier, pattern, high, has_weak
+                    # A fallible-value panic inside a length/arity guard is very
+                    # likely a bounded false positive → down-rank like a weak
+                    # signal. An unguarded arity index stays FIX.
+                    guarded = pattern in _FALLIBLE_VALUE_PATTERNS and bool(
+                        _LENGTH_GUARD_RE.search(
+                            "\n".join(lines[max(0, ln - _GUARD_LOOKBACK) : ln])
+                        )
                     )
+                    classification, confidence = _classify(
+                        tier, pattern, high, has_weak or guarded
+                    )
+                    # A pure abort-macro stub body is a deliberate shadow marker,
+                    # not a data crash → ACCEPTABLE.
+                    if is_stub and pattern in ("unreachable", "unimplemented"):
+                        classification, confidence = "ACCEPTABLE", "LOW"
                     snippet = raw.strip()[:100]
                     findings.append(
                         make_finding(
@@ -188,6 +249,8 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                                 "reachability_signals": matched,
                                 "high_reachability": high,
                                 "weak_invariant_signal": has_weak,
+                                "length_guarded": guarded,
+                                "stub_body": is_stub,
                             },
                         )
                     )
