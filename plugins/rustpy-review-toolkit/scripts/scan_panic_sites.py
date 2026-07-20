@@ -123,18 +123,39 @@ _DOWNCAST_SUBJECT_RE = re.compile(r"(\w+)\s*(?:\.clone\(\)\s*)?\.downcast\b")
 _PRIVATE_FIELD_READ_RE = re.compile(
     r"self\.\w+(?:\.\w+)*\.(?:read|write|lock|try_read|try_write)\s*\("
 )
+# The turbofish target of a downcast: `.downcast_ref::<PyTuple>()` → `PyTuple`.
+_DOWNCAST_TARGET_RE = re.compile(
+    r"\.downcast(?:_ref|_exact)?\s*::\s*<\s*([A-Za-z_][\w:]*)"
+)
 _DOWNCAST_LOOKBACK = 10
 
 
-def _downcast_downranked(raw_line: str, window_text: str) -> bool:
+def _bare_type(text: str) -> str:
+    """Last path segment of a type: `crate::PyTuple` → `PyTuple`."""
+    return text.rsplit("::", 1)[-1].strip()
+
+
+def _downcast_downranked(
+    raw_line: str, window_text: str, self_type: str | None = None
+) -> bool:
     """True if a `.downcast().unwrap()` on this line is invariant-protected.
 
-    Down-ranks when the downcast subject is a private RwLock field read or the
-    SAME variable was `fast_isinstance`/`fast_issubclass`-gated in the window —
-    never when the subject is a distinct Python-controllable value.
+    Down-ranks when: the subject is a private RwLock field read; the SAME
+    variable was `fast_isinstance`/`fast_issubclass`-gated in the window; or the
+    downcast target type is the ENCLOSING impl's own type (a protocol/py slot in
+    `impl … for X` downcasting to `X` — the slot-wrapper's `fast_isinstance(X)`
+    guard makes it airtight, since X's subclasses share X's Rust payload; the
+    `as_number` L488 false-positive class from the tuple.rs meta-eval). Never
+    down-ranks a distinct Python-controllable value (a module attribute, a
+    `.call()` result, or a downcast whose target differs from the slot owner).
     """
     if ".downcast" not in raw_line:
         return False
+    # Owner-type downcast: target == the enclosing impl's Self type.
+    if self_type:
+        tm = _DOWNCAST_TARGET_RE.search(raw_line)
+        if tm is not None and _bare_type(tm.group(1)) == _bare_type(self_type):
+            return True
     m = _DOWNCAST_SUBJECT_RE.search(raw_line)
     if m is None:
         return False
@@ -263,6 +284,7 @@ def analyze(target: str, *, max_files: int = 0, include_internal: bool = False) 
                         and _downcast_downranked(
                             raw,
                             "\n".join(lines[max(0, ln - _DOWNCAST_LOOKBACK) : ln]),
+                            fn["class"],
                         )
                     )
                     classification, confidence = _classify(

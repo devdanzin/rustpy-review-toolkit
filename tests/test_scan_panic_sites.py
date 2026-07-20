@@ -285,6 +285,41 @@ fn current_task(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
         self.assertFalse(f["details"]["downcast_guarded"])
         self.assertEqual(f["classification"], "FIX")
 
+    def test_owner_type_downcast_is_downranked(self) -> None:
+        # The tuple as_number L488 FP: a protocol slot in `impl AsNumber for
+        # PyTuple` downcasting to PyTuple is guarded by the slot-wrapper's
+        # fast_isinstance(owner) check → CONSIDER, not FIX.
+        src = """
+impl AsNumber for PyTuple {
+    fn as_number() -> &'static PyNumberMethods {
+        fn inner(number: &PyNumber, vm: &VirtualMachine) -> PyResult<bool> {
+            let zelf = number.obj.downcast_ref::<PyTuple>().unwrap();
+            Ok(!zelf.is_empty())
+        }
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/tuple.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertTrue(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_non_owner_type_downcast_stays_fix(self) -> None:
+        # A protocol slot in `impl AsNumber for PyFoo` downcasting to a DIFFERENT
+        # type (PyBar, not the owner) is NOT guaranteed by the wrapper → FIX.
+        src = """
+impl AsNumber for PyFoo {
+    fn as_number(&self, other: PyObjectRef) -> PyResult<()> {
+        let bar = other.downcast_ref::<PyBar>().unwrap();
+        Ok(())
+    }
+}
+"""
+        r = _run({"crates/vm/src/builtins/foo.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertFalse(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "FIX")
+
     def test_downcast_with_different_var_gated_stays_fix(self) -> None:
         # The throw L1081 bug: `exc_type` is gated, but `exc` (a distinct value
         # from exc_type.call()) is downcast → must NOT be down-ranked.
