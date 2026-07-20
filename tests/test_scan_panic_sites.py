@@ -228,6 +228,89 @@ impl PyFoo {
         self.assertFalse(f["details"]["stub_body"])
         self.assertEqual(f["classification"], "CONSIDER")
 
+    def test_downcast_of_private_field_read_is_downranked(self) -> None:
+        # `self.fut_exception.read()` → the type is an internal invariant; the
+        # downcast cannot fail from Python (the _asyncio.rs L229 shape).
+        src = """
+impl PyFuture {
+    #[pymethod]
+    fn result(&self, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let fut_exception = self.fut_exception.read().clone();
+        if let Some(exc) = fut_exception {
+            let exc: PyBaseExceptionRef = exc.downcast().unwrap();
+            return Ok(exc.into());
+        }
+        Ok(vm.ctx.none())
+    }
+}
+"""
+        r = _run({"crates/stdlib/src/_asyncio.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertTrue(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_downcast_of_same_var_isinstance_gate_is_downranked(self) -> None:
+        # `exc.fast_isinstance(...)` then `exc.downcast()` — same variable gated
+        # (the _asyncio.rs L312 shape).
+        src = """
+impl PyFuture {
+    #[pymethod]
+    fn set_exception(&self, exc: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+        if exc.fast_isinstance(vm.ctx.exceptions.stop_iteration) {
+            let stop_iter: PyRef<PyBaseException> = exc.downcast().unwrap();
+            return Ok(());
+        }
+        Ok(())
+    }
+}
+"""
+        r = _run({"crates/stdlib/src/_asyncio.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertTrue(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "CONSIDER")
+
+    def test_downcast_of_module_attr_stays_fix(self) -> None:
+        # The current_task L2408 bug: downcast a Python-reassignable module
+        # attribute — no self-field, no same-var gate → stays FIX.
+        src = """
+#[pyfunction]
+fn current_task(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+    let current_tasks = get_current_tasks_dict(vm)?;
+    let dict: PyDictRef = current_tasks.downcast().unwrap();
+    Ok(dict.into())
+}
+"""
+        r = _run({"crates/stdlib/src/_asyncio.rs": src})
+        f = next(f for f in r["findings"] if f["details"]["pattern"] == "unwrap")
+        self.assertFalse(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "FIX")
+
+    def test_downcast_with_different_var_gated_stays_fix(self) -> None:
+        # The throw L1081 bug: `exc_type` is gated, but `exc` (a distinct value
+        # from exc_type.call()) is downcast → must NOT be down-ranked.
+        src = """
+impl PyFutureIter {
+    #[pymethod]
+    fn throw(&self, exc_type: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        let exc = if exc_type.fast_isinstance(vm.ctx.types.type_type) {
+            exc_type.call((), vm)?
+        } else {
+            exc_type
+        };
+        Err(exc.downcast().unwrap())
+    }
+}
+"""
+        r = _run({"crates/stdlib/src/_asyncio.rs": src})
+        # the `exc.downcast()` finding — subject `exc`, gate on `exc_type`
+        f = next(
+            f
+            for f in r["findings"]
+            if f["details"]["pattern"] == "unwrap" and f["line"] >= 9
+        )
+        self.assertFalse(f["details"]["downcast_guarded"])
+        self.assertEqual(f["classification"], "FIX")
+
     def test_unreachable_among_other_code_is_not_a_stub(self) -> None:
         # An `unreachable!` after real logic (an exhaustive match) is NOT a pure
         # stub → stays CONSIDER (the agent judges exhaustiveness).
