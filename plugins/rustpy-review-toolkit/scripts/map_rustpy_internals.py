@@ -391,14 +391,23 @@ def _struct_field_attrs(field_node: Any, source: bytes) -> list[dict]:
 def extract_pyclass_payloads(
     tree_or_node: object, source: bytes, default_module: str
 ) -> list[dict]:
-    """Extract ``#[pyclass]`` struct payloads with their traverse option + fields.
+    """Extract ``#[pyclass]`` / ``#[pyexception]`` payloads with traverse + fields.
 
-    Returns dicts with ``rust_name``, ``python_name``, ``module``,
-    ``traverse_option`` (None/"auto"/"manual"), ``has_derive_traverse`` (a
-    separate ``#[derive(Traverse)]``), ``fields`` (each with ``name``, ``type``,
-    ``skip`` for ``#[pytraverse(skip)]``), ``line``. Consumed by
-    ``scan_gc_traverse``. Enums are reported with an empty field list (their
-    variants need the deeper walk the gc-traverse scanner does when needed).
+    Returns dicts with ``rust_name``, ``python_name``, ``module``, ``macro``
+    (``"pyclass"`` or ``"pyexception"``), ``traverse_option``
+    (None/"auto"/"manual"), ``has_derive_traverse`` (a separate
+    ``#[derive(Traverse)]``), ``fields`` (each with ``name``, ``type``, ``skip``
+    for ``#[pytraverse(skip)]``), ``line``. Consumed by ``scan_gc_traverse``.
+
+    ``#[pyexception]`` is RustPython's domain-specific exception-payload macro
+    (it expands to ``#[pyclass]`` at macro-expansion time, which a syntactic
+    tree-sitter pass cannot see). Recognising it directly closes the
+    exception-machinery blind spot: the transparent-newtype subtypes
+    (``struct PyKeyError(PyLookupError);``) are tuple structs with an empty
+    named-field list, so they correctly produce no gc finding (their payload is
+    the reused base's); a future custom exception payload that adds a ref field
+    and forgets its manual ``Traverse`` is now caught. Enums are reported with an
+    empty field list (their variants need a deeper walk when needed).
     """
     root = _root_node(tree_or_node)
     out: list[dict] = []
@@ -406,12 +415,13 @@ def extract_pyclass_payloads(
 
     for node in list(walk(root, "struct_item")) + list(walk(root, "enum_item")):
         attrs = extract_attributes(node, source)
-        pyclass = _find_attr(attrs, "pyclass")
-        if pyclass is None:
+        payload_attr = _find_attr(attrs, "pyclass") or _find_attr(attrs, "pyexception")
+        if payload_attr is None:
             continue
+        macro = payload_attr["name"]
         name_node = node.child_by_field_name("name")
         rust_name = text_of(name_node, source) if name_node is not None else ""
-        args = pyclass.get("args_text")
+        args = payload_attr.get("args_text")
         python_name = _name_override(args) or rust_name
         module = _name_override_module(args) or default_module
         has_derive_traverse = any(
@@ -436,6 +446,7 @@ def extract_pyclass_payloads(
                 "rust_name": rust_name,
                 "python_name": python_name,
                 "module": module,
+                "macro": macro,
                 "traverse_option": _traverse_option(args),
                 "has_derive_traverse": has_derive_traverse,
                 "fields": fields,
@@ -520,10 +531,16 @@ def analyze(target: str, *, max_files: int = 0) -> dict:
         "module_count": len(module_names),
         "modules": sorted(module_names),
         "class_count": len(classes),
+        # Only payloads that actually hold fields are gc-traverse candidates —
+        # a transparent-newtype exception (empty named-field list) reuses its
+        # base's payload and is correctly not a "missing traverse" case, so it
+        # is excluded from this orientation list to keep it focused.
         "classes_without_traverse": [
             c["rust_name"]
             for c in classes
-            if c["traverse_option"] is None and not c["has_derive_traverse"]
+            if c["traverse_option"] is None
+            and not c["has_derive_traverse"]
+            and c["fields"]
         ],
         "protocol_impl_counts": dict(sorted(protocol_impls.items())),
         "exposed_function_count": len(exposed_functions),

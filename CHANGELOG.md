@@ -4,6 +4,24 @@ All notable changes to rustpy-review-toolkit are documented here. The format is 
 
 ## [Unreleased]
 
+All of the below came from the `exceptions.rs` meta-evaluation — running the full agent panel on one file, grading each agent against ground truth (1 real bug, 14 guarded false positives, a GC-complete file), and feeding the toolkit's own blind spots back into it.
+
+### Changed
+
+- **Panic-site reachability calibration** (`scan_panic_sites.py` + `rustpython_reachability_sources.json`):
+  - Added `get_arg(N)` / `.get_arg(` to the `user_index_or_arity` reachability signals. `get_arg(N)` is RustPython's idiomatic arity access; missing it had under-ranked a genuine bug (`ImportError().__reduce__()` aborts the interpreter — `get_arg(0).unwrap()` on empty args, confirmed reproduced) as CONSIDER instead of FIX.
+  - Down-rank a fallible-value panic (`args[N]` / `get_arg(N)` / `.unwrap()`) inside a length/arity guard (`if (2..=5).contains(&len)`, `match args.len()`, `if len == 2`, …) from FIX to CONSIDER via a new `_LENGTH_GUARD_RE` over a 16-line lookback. An UNGUARDED arity index (the `_typing._idfunc` / RUSTPY-0005 shape) stays FIX. New `details.length_guarded` flag.
+  - **Pure abort-macro stubs → ACCEPTABLE.** A method whose entire body is one `unreachable!(...)` / `unimplemented!(...)` is a RustPython shadow marker (`unreachable!("slot_init is defined")`) that a sibling `slot_*` form overrides — not a data crash. Now classified ACCEPTABLE (`details.stub_body`). `todo!` is excluded (genuinely unimplemented work stays CONSIDER).
+  - Net on the whole-tree scan: FIX 95 → 56 (39 guarded false positives reclassified), with **zero loss of confirmed-bug coverage** (all 14 `known_panics.tsv` bugs still surfaced). On `exceptions.rs`: 14 scanner-FIX → 1 (the real bug), + 11 shadow stubs → ACCEPTABLE.
+
+- **`#[pyexception]` payload recognition** (`map_rustpy_internals.py`). `extract_pyclass_payloads` now treats `#[pyexception]` — RustPython's domain-specific exception-payload macro — as a payload-defining attribute, closing the gc-traverse blind spot the mapper and gc agents both surfaced. On `exceptions.rs` the mapper now catalogs **68 payloads (was 1)** and gc-traverse analyzes **68 (was 1)**, still with 0 findings: the transparent-newtype subtypes (`struct PyKeyError(PyLookupError);`) are tuple structs with an empty named-field list → correctly no finding (payload reuse), while a future custom exception payload that adds a ref field and forgets its manual `Traverse` is now caught. Repo-wide, gc-traverse payload coverage rose to 330 with no new false positives. Payloads carry a new `macro` field; the mapper's `classes_without_traverse` orientation list is now filtered to field-bearing payloads.
+
+- **`git-history-analyzer` agent: override `--max-commits` on RustPython.** The vendored `analyze_history.py` defaults to `--max-commits 2000`, which silently truncates a `--days 365/730` window to ~a quarter of the range on RustPython (~2000 commits/7 months) — missing the reference-fix and bug-introduced commits a regression determination needs. The agent now passes `--max-commits 8000` and sanity-checks the returned date range. (The proper clamp-to-window fix belongs upstream in the shared `analyze_history.py`; the vendored copy is not forked.)
+
+### Added
+
+- Found (and reproduced) a new interpreter-abort bug not in the fuzzer catalog: `ImportError().__reduce__()` / `pickle.dumps(ImportError())` panic on `get_arg(0).unwrap()` over an empty args tuple (`exceptions.rs`, `__reduce__`), inherited by `ModuleNotFoundError`. Latent since the `crates/vm` layout was created; a correctly-guarded twin (`OSError.__reduce__`) sits in the same file. CPython returns `(ImportError, ())`.
+
 ## [0.1.0] — initial release
 
 The first release: a static, implementer-perspective review toolkit for the RustPython interpreter's own Rust source. Six agents, four commands, tree-sitter-rust-powered, static-first.
