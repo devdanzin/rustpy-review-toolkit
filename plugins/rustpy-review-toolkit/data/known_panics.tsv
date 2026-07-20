@@ -1,0 +1,26 @@
+# bug_id	signature
+RUSTPY-0001	crates/vm/src/stdlib/_thread.rs:977
+RUSTPY-0002	crates/vm/src/types/structseq.rs:311
+RUSTPY-0003	crates/vm/src/class.rs:87
+RUSTPY-0004	crates/stdlib/src/csv.rs:1070
+RUSTPY-0004	crates/stdlib/src/csv.rs:748
+RUSTPY-0004	crates/stdlib/src/csv.rs:805
+RUSTPY-0005	crates/vm/src/stdlib/_typing.rs:43
+RUSTPY-0006	crates/vm/src/stdlib/builtins.rs:557
+RUSTPY-0006	crates/vm/src/stdlib/builtins.rs:607
+RUSTPY-0009	crates/vm/src/builtins/staticmethod.rs:182
+RUSTPY-0010	crates/stdlib/src/binascii.rs:507
+RUSTPY-0011	crates/vm/src/builtins/classmethod.rs:198
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:759
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:775
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:791
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:807
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:895
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:908
+RUSTPY-0017	crates/vm/src/stdlib/_ctypes/simple.rs:921
+RUSTPY-0019	crates/stdlib/src/contextvars.rs:173
+RUSTPY-0019	crates/stdlib/src/contextvars.rs:82
+RUSTPY-0019	crates/stdlib/src/contextvars.rs:86
+RUSTPY-0020	crates/vm/src/utils.rs:61
+RUSTPY-0021	crates/vm/src/stdlib/sys.rs:874
+RUSTPY-0022	crates/vm/src/stdlib/itertools.rs:282

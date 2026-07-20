@@ -1,0 +1,51 @@
+{
+  "_description": "RustPython derive-macro attributes and the rules for deriving a Rust item's Python-facing name and reachability tier. Backs the internals-mapper's attribution and the panic-site auditor's tiering. Verified against crates/derive-impl/src/{pyclass,pymodule}.rs and the fuzzing seed tool's classify_method (rustpython-findings/tools/unwrap_scan/src/main.rs).",
+  "_source": "crates/derive-impl/src/ @ RustPython 3290f287f",
+
+  "exposing_attributes": {
+    "_note": "An item carrying one of these attributes is DIRECTLY Python-reachable (the `py` tier). `kind` labels the finding; `name_rule` says how the Python name is derived.",
+    "pyfunction": {"item": "free-fn", "kind": "function", "tier": "py"},
+    "pymethod": {"item": "impl-method", "kind": "method", "tier": "py", "magic_dunder": true},
+    "pygetset": {"item": "impl-method", "kind": "getset", "tier": "py", "setter_flag": "setter"},
+    "pyslot": {"item": "impl-method", "kind": "slot", "tier": "py", "name_rule": "ident"},
+    "pystaticmethod": {"item": "impl-method", "kind": "staticmethod", "tier": "py"},
+    "pyclassmethod": {"item": "impl-method", "kind": "classmethod", "tier": "py"},
+    "pymodule": {"item": "mod", "kind": "module", "tier": "py"}
+  },
+
+  "class_attributes": {
+    "_note": "Struct/enum-level attributes that define a Python type (the payload). Read by gc-traverse for the HAS_TRAVERSE opt-in, and by the mapper for the class catalog.",
+    "pyclass": {
+      "item": "struct/enum/impl",
+      "options": {
+        "name": "name = \"...\" — Python type name override (else the Rust ident)",
+        "module": "module = \"...\" | false — owning module",
+        "traverse": "bare `traverse` → auto `#[derive(Traverse)]`; `traverse = \"manual\"` → hand-written `impl Traverse`; ABSENT → HAS_TRAVERSE=false (no GC tracking)",
+        "unhashable": "opts the type out of __hash__",
+        "with": "with(Trait, ...) on the IMPL attr composes protocol slots from trait impls (Constructor→__new__, Initializer→__init__, ...)",
+        "flags": "flags(BASETYPE, ...) — always adds IMMUTABLETYPE"
+      },
+      "traverse_absent_means": "no MaybeTraverse::HAS_TRAVERSE — the type is invisible to the cycle collector; owned PyObjectRef/PyRef fields become uncollectable-cycle risk (the gc-traverse crown-jewel check)"
+    }
+  },
+
+  "field_attributes": {
+    "_note": "Field-level attributes inside a `#[derive(Traverse)]` payload.",
+    "pytraverse": {
+      "item": "field",
+      "options": {"skip": "the ONLY accepted option — emits an empty traverse for this field"},
+      "skip_is_a_bug_when": "the skipped field's type OWNS a PyObjectRef/PyRef (see gc_managed_types.json); skipping a non-owning field (e.g. `PyRwLock<BigInt>`, an atomic, a primitive) is correct and must NOT be flagged"
+    }
+  },
+
+  "name_rules": {
+    "_note": "How the mapper derives the Python-facing name from an exposing attribute.",
+    "explicit_override": "name = \"...\"  in the attribute args wins",
+    "magic_dunder": "for #[pymethod(magic)] the Python name is `__<ident>__`",
+    "default": "otherwise the Rust fn/mod ident verbatim"
+  },
+
+  "internal_tier": {
+    "_note": "A free fn with NO exposing attribute, or an impl method with no exposing attribute and not in a protocol-trait impl, is `internal` — reachable only transitively. The panic-site auditor DEFAULT-SILENCES the internal tier (a panic there is not directly Python-triggerable; agent triage escalates only with a concrete reachability chain)."
+  }
+}

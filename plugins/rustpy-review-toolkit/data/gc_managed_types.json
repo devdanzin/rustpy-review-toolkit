@@ -1,0 +1,55 @@
+{
+  "_description": "Which RustPython field types OWN a garbage-collectable Python reference (and therefore must be visited by `Traverse::traverse`) versus which do not (safe to skip / no traverse needed). This is the false-positive control for the gc-traverse auditor: `#[pytraverse(skip)]` on a `counter: PyRwLock<BigInt>` is CORRECT (BigInt owns no Python ref), while a skip on `iterable: PyIter` would be a real leak. Derived from the Traverse impls in crates/vm/src/object/traverse.rs and audited against builtins/ payloads.",
+  "_source": "crates/vm/src/object/traverse.rs (leaf/recurse impls) @ RustPython 3290f287f",
+  "_matching": "A field's type owns a ref if its type TEXT contains any `ref_owning_tokens` entry (word-ish substring), after the container wrappers in `transparent_containers` are seen through. `non_owning_leaf_types` are examples that must NOT match — none of them contain a ref-owning token, so the substring rule handles them; they are listed for the agent's benefit and as regression anchors. Cross-struct ownership (a field whose type is another local struct that itself owns refs, e.g. `inner: PySetInner`) is resolved intra-file by the scanner's local struct-closure, not by this table.",
+
+  "ref_owning_tokens": [
+    "PyObjectRef",
+    "PyObject",
+    "PyRef",
+    "PyIter",
+    "PyStackRef",
+    "PyBaseExceptionRef",
+    "PyExceptionRef",
+    "PyStrRef",
+    "PyIntRef",
+    "PyFloatRef",
+    "PyBytesRef",
+    "PyListRef",
+    "PyTupleRef",
+    "PyDictRef",
+    "PySetRef",
+    "PyTypeRef",
+    "PyFunctionRef",
+    "PyCodeRef",
+    "PyModuleRef",
+    "PyWeak",
+    "ArgCallable",
+    "ArgIterable",
+    "PyGetSet"
+  ],
+
+  "transparent_containers": {
+    "_note": "Generic wrappers that own a ref IFF their type parameter does. The scanner sees through these — `PyRwLock<Vec<PyObjectRef>>` owns refs; `PyRwLock<BigInt>` does not. Traverse has explicit recurse impls for all of these (traverse.rs Vec/Option/Box/[T]/tuples; the locks use fallible try_read/try_lock + skip-on-fail).",
+    "containers": ["Vec", "Option", "Box", "PyRwLock", "PyMutex", "PyRc", "Rc", "Arc", "RefCell", "Cell", "PyAtomicRef", "Either", "[", "PositionIterInternal", "IterStatus"]
+  },
+
+  "non_owning_leaf_types": {
+    "_note": "Leaf types that never own a Python ref — a `#[pytraverse(skip)]` on a field of one of these is correct and must NOT be flagged. None contains a ref-owning token, so the substring rule already excludes them; listed as documentation + regression anchors (the enumerate `counter: PyRwLock<BigInt>` skip is the canonical safe case).",
+    "types": [
+      "bool", "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64", "char",
+      "String", "&str", "BigInt", "PyHash", "DictSize", "Wtf8Buf",
+      "AtomicU32", "AtomicU64", "AtomicUsize", "AtomicBool", "AtomicCell",
+      "PyAtomic<PyHash>", "OnceCell<()>", "PhantomData"
+    ]
+  },
+
+  "traverse_contract": {
+    "_note": "The `unsafe trait Traverse` contract (traverse.rs:26-42) the gc-traverse auditor enforces against manual `fn traverse` bodies.",
+    "rules": [
+      "every owned PyObjectRef/PyRef must be passed to `traverse_fn` AT MOST ONCE — a miss leaks the object; a double-visit can panic/deadlock the collector",
+      "DO NOT clone a PyObjectRef/PyRef inside traverse() (bumps the refcount the collector is trying to measure)",
+      "a manual traverse that takes a lock must use the FALLIBLE try_read/try_lock and skip on failure (conservative keep-alive), never a blocking lock (deadlock risk) — see the PyRwLock/PyMutex impls at traverse.rs:111/133"
+    ]
+  }
+}

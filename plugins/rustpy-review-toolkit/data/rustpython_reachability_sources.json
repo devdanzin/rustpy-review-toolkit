@@ -1,0 +1,55 @@
+{
+  "_description": "Signals that a fallible operation's failure (the Err/None/out-of-bounds a `.unwrap()`/`.expect()`/index panics on) is CONTROLLED BY PYTHON INPUT rather than a genuine internal invariant. The panic-site auditor uses these to RANK `py`/`protocol`-tier sites: a panic whose failing value flows from a Python argument, a Python __repr__, a downcast of a Python object, a user-controlled index, or an integer-narrowing of a Python int is a real remotely-triggerable crash; a panic on an invariant the VM itself established is far weaker. Each category lists substring tokens that, appearing on or near the panic line, raise the reachability confidence. Derived from the 24 confirmed fuzzer findings (rustpython-findings) and their repros.",
+  "_source": "rustpython-findings REPORT + repros/*.py @ RustPython 3290f287f",
+  "_usage": "The scanner attaches matched categories to each candidate as `details.reachability_signals`; the agent weighs them. Presence of ANY high-weight signal on a py/protocol site is the strongest indicator of a genuine FIX.",
+
+  "categories": [
+    {
+      "name": "downcast_or_coerce",
+      "weight": "high",
+      "why": "coercing/downcasting a Python object can fail on adversarial input; unwrapping the result panics on the wrong type",
+      "tokens": [".downcast", ".downcast_ref", ".downcast_exact", "try_from_object", "try_to_value", ".try_index", ".to_index", "try_index", "PyIntRef", "PyStrRef", "::try_from"]
+    },
+    {
+      "name": "int_narrowing",
+      "weight": "high",
+      "why": "a Python int is unbounded; narrowing it to a fixed width (`as u8`, `to_u32`, `try_into`) fails or wraps on large values (the _ctypes int-too-large expect, RUSTPY-0017)",
+      "tokens": ["as u8", "as u16", "as u32", "as usize", "as i32", ".to_u32", ".to_u64", ".to_usize", ".to_i64", ".try_into()", "from_i64", "from_u64", "to_primitive"]
+    },
+    {
+      "name": "user_index_or_arity",
+      "weight": "high",
+      "why": "an index/slice/arity taken from Python (args[N], a user-supplied position) can be out of bounds — the classic OOB panic (structseq, itertools cycle, csv)",
+      "tokens": [".args[", "args[", "[0]", "[1]", ".get(", "get_unchecked", "nth(", ".index(", "..=", "position", "slice"]
+    },
+    {
+      "name": "repr_or_str",
+      "why": "calling __repr__/__str__ on a Python object runs user code that can return anything or raise (the staticmethod/classmethod repr unwrap, RUSTPY-0009/0011; empty-collection repr expect, RUSTPY-0020)",
+      "weight": "medium",
+      "tokens": [".repr(", ".str(", ".repr_str", "repr(vm)", "str(vm)", ".to_repr", "obj_repr", "PyStr"]
+    },
+    {
+      "name": "user_mapping_get",
+      "weight": "medium",
+      "why": "a lookup in a user-controlled dict/map returning None, then unwrapped",
+      "tokens": [".get(", ".get_item", ".mapping", "get_or_insert", ".remove(", ".entry("]
+    },
+    {
+      "name": "warn_or_callback",
+      "weight": "medium",
+      "why": "invoking a warning or a user callback runs Python code that can raise; unwrapping the PyResult panics (sys.breakpointhook warn unwrap, RUSTPY-0021)",
+      "tokens": [".warn(", "warnings", "call(", ".call_method", "invoke", "callback"]
+    },
+    {
+      "name": "concurrency_toctou",
+      "weight": "medium",
+      "why": "a length checked then indexed can race under the `threading` feature — a length that was valid becomes stale (itertools cycle concurrent OOB, RUSTPY-0022; contextvars double-borrow, RUSTPY-0019)",
+      "tokens": ["borrow_mut", ".borrow(", "RefCell", "try_borrow", ".lock(", ".write(", ".read("]
+    }
+  ],
+
+  "weak_internal_signals": {
+    "_note": "Tokens suggesting the failure is a VM-established invariant, NOT Python-controlled — LOWER the reachability confidence even on a py/protocol site.",
+    "tokens": ["debug_assert", "// SAFETY", "checked above", "just inserted", "we just", "cannot fail", "always Some", "known to be", "guaranteed"]
+  }
+}
