@@ -4,6 +4,14 @@ All notable changes to rustpy-review-toolkit are documented here. The format is 
 
 ## [Unreleased]
 
+### Changed
+
+- **`data/known_panics.tsv` now folds in the static-review findings (`RPYR-*`)**, closing the findings-repo → toolkit feedback loop the design describes. The `known-issues` regression cross-reference previously carried only the fusil catalog (`RUSTPY-*`); it now also carries the reproduced-crash sites from [rustpython-review-findings](https://github.com/devdanzin/rustpython-review-findings) (RPYR-0001..0020, crash kinds only — uncollectable-cycle leaks stay in the findings repo). Catalog is now **53 sites / 30 bugs** (14 RUSTPY + 16 RPYR). Header, `check_known_issues.py`, and `known-issues.md` updated to the two-source framing. Caveat documented inline: some recursion/segv sites (RPYR-0013/0014 hash recursion, RPYR-0020 Debug cast) carry no panic token, so a fresh panic scan reads them `absent` though unfixed — the drift-tolerant workflow already says to read the file to confirm.
+
+### Notes
+
+- The folded RPYR-0014..0020 entries came from an **informed whole-tree explore** (13 agents seeded with the RPYR-*/RUSTPY-* catalog + FP taxonomy, hunting un-found siblings of confirmed shapes). It reproduced 7 new Python-reachable crashes: the systemic hash-**dispatch** gap (`protocol/object.rs:695` lacks the `with_recursion` that repr/compare have — supersedes RPYR-0013's per-slot fix; covers genericalias/slice/code hash), genericalias `make_parameters` eager recursion (RustPython side of CPython #154275), `classmethod` missing GC traverse (weakref-proven; sibling `staticmethod` has it), ctypes `Pointer.__setitem__` int-narrow abort, `_imp.find_frozen` 2nd-arg abort, `os.posix_spawn` eager-collect abort (unprivileged), and `_asyncio._enter_task` `{:?}` reaching the RUSTPY-0018 Debug SIGSEGV. Recursion umbrella is RustPython **#2796** (= fuzzer RUSTPY-0007a).
+
 ## [0.2.1] — 2026-07-20
 
 Scanner calibrations from the first **whole-tree run of all 13 agents** (the v0.2 class-expansion agents' debut), which reproduced live 3 SIGSEGVs, 6 SIGABRTs, and 2 panic classes, and drove three precision fixes. Test count 112 → 117; `ruff` + `mypy` clean; each validated on the real tree.

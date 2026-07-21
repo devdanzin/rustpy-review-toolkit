@@ -1,4 +1,15 @@
 # bug_id	signature
+# RustPython known-crash catalog for the `known-issues` regression cross-reference.
+# Two sources, both confirmed reproduced on the interpreter binary:
+#   RUSTPY-*  fusil fuzzing campaign + CPython differential  (github.com/devdanzin/rustpython-findings)
+#   RPYR-*    static review by this toolkit, then reproduced (github.com/devdanzin/rustpython-review-findings)
+# Crash-kind sites only (panic/abort/segv); uncollectable-cycle LEAKS live in the findings
+# repo, not here (a missing-traverse site is not a panic site). Drift-tolerant: verify an
+# `absent`/`line_drifted` verdict by reading the file — some recursion/segv sites (e.g.
+# RPYR-0013/0014 hash recursion, RPYR-0020 Debug cast) carry NO panic token, so a fresh
+# panic-site scan reads them `absent` even though they are unfixed.
+#
+# --- RUSTPY-* (fusil fuzzing + CPython differential) ---
 RUSTPY-0001	crates/vm/src/stdlib/_thread.rs:977
 RUSTPY-0002	crates/vm/src/types/structseq.rs:311
 RUSTPY-0003	crates/vm/src/class.rs:87
@@ -24,3 +35,33 @@ RUSTPY-0019	crates/stdlib/src/contextvars.rs:86
 RUSTPY-0020	crates/vm/src/utils.rs:61
 RUSTPY-0021	crates/vm/src/stdlib/sys.rs:874
 RUSTPY-0022	crates/vm/src/stdlib/itertools.rs:282
+#
+# --- RPYR-* (static-review findings, folded in to close the feedback loop) ---
+RPYR-0001	crates/vm/src/exceptions.rs:1872
+RPYR-0002	crates/stdlib/src/_asyncio.rs:2408
+RPYR-0003	crates/stdlib/src/_asyncio.rs:1081
+RPYR-0004	crates/stdlib/src/mmap.rs:795
+RPYR-0004	crates/stdlib/src/mmap.rs:812
+RPYR-0005	crates/stdlib/src/mmap.rs:903
+RPYR-0006	crates/vm/src/stdlib/_collections.rs:317
+RPYR-0007	crates/vm/src/sequence.rs:107
+RPYR-0009	crates/vm/src/stdlib/itertools.rs:1205
+RPYR-0009	crates/vm/src/stdlib/itertools.rs:1306
+RPYR-0009	crates/vm/src/stdlib/itertools.rs:1412
+RPYR-0011	crates/stdlib/src/math.rs:733
+RPYR-0011	crates/stdlib/src/math.rs:735
+RPYR-0013	crates/vm/src/builtins/tuple.rs:499
+RPYR-0013	crates/vm/src/builtins/tuple.rs:683
+RPYR-0014	crates/vm/src/builtins/genericalias.rs:632
+RPYR-0014	crates/vm/src/builtins/slice.rs:270
+RPYR-0014	crates/vm/src/protocol/object.rs:695
+RPYR-0015	crates/vm/src/builtins/genericalias.rs:295
+RPYR-0015	crates/vm/src/builtins/genericalias.rs:329
+RPYR-0015	crates/vm/src/builtins/union.rs:236
+RPYR-0017	crates/vm/src/stdlib/_ctypes/pointer.rs:692
+RPYR-0018	crates/vm/src/stdlib/_imp.rs:329
+RPYR-0019	crates/vm/src/stdlib/posix.rs:1403
+RPYR-0019	crates/vm/src/stdlib/posix.rs:1409
+RPYR-0019	crates/vm/src/stdlib/posix.rs:1417
+RPYR-0020	crates/stdlib/src/_asyncio.rs:2491
+RPYR-0020	crates/vm/src/object/ext.rs:278

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Cross-reference the fuzzer-confirmed panic catalog against a fresh scan.
+"""Cross-reference the confirmed-crash catalog against a fresh scan.
 
-Backs the ``known-issues`` command. ``data/known_panics.tsv`` records the 24
-panic sites the fuzzing campaign confirmed as reproduced interpreter crashes
-(each a ``RUSTPY-NNNN`` id and a ``crates/…:line`` signature). This script runs
+Backs the ``known-issues`` command. ``data/known_panics.tsv`` records the crash
+sites confirmed as reproduced interpreter crashes from two sources — the ``fusil``
+fuzzing campaign (``RUSTPY-*``) and this toolkit's static review, then reproduced
+(``RPYR-*``) — each a ``crates/…:line`` signature. Note some recursion/segv sites
+(e.g. RPYR-0013/0014 hash recursion) carry no panic token, so a fresh panic scan
+reads them ``absent`` though unfixed — read the file to confirm. This script runs
 a fresh panic-site scan (with ``--include-internal``, since several confirmed
 sites live in internal helpers reached transitively) and reports, per catalog
 entry, whether the site is:

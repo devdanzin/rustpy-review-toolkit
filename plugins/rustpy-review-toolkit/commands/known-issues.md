@@ -1,12 +1,12 @@
 ---
-description: "Cross-reference the fuzzer-confirmed panic catalog against a fresh scan of RustPython. Reports which of the 24 reproduced interpreter crashes are still present, drifted, or fixed. The toolkit's signature regression command — static, drift-tolerant, no repros run."
+description: "Cross-reference the confirmed-crash catalog (fusil fuzzing RUSTPY-* + this toolkit's reproduced static-review findings RPYR-*) against a fresh scan of RustPython. Reports which reproduced interpreter crashes are still present, drifted, or fixed. The toolkit's signature regression command — static, drift-tolerant, no repros run."
 argument-hint: "[scope]"
 allowed-tools: ["Bash", "Glob", "Grep", "Read", "Task"]
 ---
 
 # RustPython Known-Issues Regression
 
-The signature command of this toolkit. `data/known_panics.tsv` records the panic sites a `fusil` + CPython-differential fuzzing campaign confirmed as **reproduced interpreter crashes** (each a `RUSTPY-NNNN` id and a `crates/…:line` signature). This command runs a fresh panic-site scan and reports, per confirmed bug, whether it is still in the tree.
+The signature command of this toolkit. `data/known_panics.tsv` records crash sites confirmed as **reproduced interpreter crashes** from two sources — the `fusil` + CPython-differential fuzzing campaign (`RUSTPY-NNNN`) and this toolkit's static review, then reproduced (`RPYR-NNNN`) — each a `crates/…:line` signature. This command runs a fresh panic-site scan and reports, per confirmed bug, whether it is still in the tree. (Some recursion/segv sites carry no panic token — e.g. RPYR-0013/0014 hash recursion — so they read `absent` against a panic scan though unfixed; read the file to confirm.)
 
 It is **static and drift-tolerant** — it does not run the repros. It answers: "of the crashes we know a Python program can trigger, which are still unfixed at this checkout?"
 
